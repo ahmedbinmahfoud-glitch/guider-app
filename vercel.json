@@ -5,5 +5,15 @@
       "memory": 512,
       "maxDuration": 30
     }
-  }
+  },
+  "routes": [
+    {
+      "src": "/demo",
+      "dest": "/demo.html"
+    },
+    {
+      "src": "/api/index",
+      "dest": "/api/index.js"
+    }
+  ]
 }
