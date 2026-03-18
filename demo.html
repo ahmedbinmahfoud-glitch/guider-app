@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Guider — Demo</title>
+  <title>Guider — دريب اون</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -13,6 +13,7 @@
       align-items: center;
       justify-content: center;
       min-height: 100vh;
+      direction: ltr;
     }
     #guider-widget {
       width: 390px;
@@ -23,6 +24,7 @@
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      direction: ltr;
     }
     #guider-header {
       background: linear-gradient(135deg, #1a1a2e, #16213e);
@@ -31,6 +33,7 @@
       display: flex;
       align-items: center;
       gap: 12px;
+      direction: ltr;
     }
     #guider-header .avatar {
       width: 42px;
@@ -52,20 +55,31 @@
       display: flex;
       flex-direction: column;
       gap: 10px;
+      direction: ltr;
     }
-    .msg-bot-wrap { display: flex; justify-content: flex-end; }
+    /* Bot messages — RIGHT side */
+    .msg-bot-wrap {
+      display: flex;
+      justify-content: flex-end;
+    }
     .msg-bot-wrap .msg {
       background: #f0f0f0;
       color: #1a1a2e;
       border-radius: 18px 18px 4px 18px;
       text-align: right;
+      direction: rtl;
     }
-    .msg-user-wrap { display: flex; justify-content: flex-start; }
+    /* User messages — LEFT side */
+    .msg-user-wrap {
+      display: flex;
+      justify-content: flex-start;
+    }
     .msg-user-wrap .msg {
       background: #1a1a2e;
       color: #fff;
       border-radius: 18px 18px 18px 4px;
       text-align: right;
+      direction: rtl;
     }
     .msg {
       max-width: 82%;
@@ -73,7 +87,11 @@
       font-size: 14px;
       line-height: 1.6;
     }
-    .choices-wrap { display: flex; justify-content: flex-end; }
+    /* Choices */
+    .choices-wrap {
+      display: flex;
+      justify-content: flex-end;
+    }
     .choices-inner {
       display: flex;
       flex-wrap: wrap;
@@ -95,6 +113,7 @@
     }
     .choice-btn:hover { background: #1a1a2e; color: #fff; }
     .choice-btn:disabled { opacity: 0.4; cursor: default; }
+    /* Typing */
     .typing-wrap { display: flex; justify-content: flex-end; }
     .typing {
       display: flex;
@@ -121,6 +140,7 @@
       display: flex;
       gap: 8px;
       align-items: center;
+      direction: ltr;
     }
     #guider-input {
       flex: 1;
@@ -131,6 +151,7 @@
       outline: none;
       font-family: inherit;
       direction: rtl;
+      text-align: right;
     }
     #guider-input:focus { border-color: #1a1a2e; }
     #guider-send {
@@ -151,13 +172,12 @@
   </style>
 </head>
 <body>
-
 <div id="guider-widget">
   <div id="guider-header">
     <div class="avatar">🤖</div>
     <div class="info">
-      <h3>Guider</h3>
-      <p>مساعدك الذكي للتسوق</p>
+      <h3>أحمد | دريب اون</h3>
+      <p>مساعدك لاختيار قهوتك المثالية</p>
     </div>
   </div>
   <div id="guider-messages"></div>
@@ -169,15 +189,6 @@
 
 <script>
   const BACKEND_URL = 'https://guider-app.vercel.app/api/index';
-
-  const products = [
-    { name: 'قهوة إثيوبية', price: 85, currency: 'SAR', category: 'قهوة مختصة' },
-    { name: 'قهوة كولومبية', price: 75, currency: 'SAR', category: 'قهوة مختصة' },
-    { name: 'قهوة يمنية', price: 120, currency: 'SAR', category: 'قهوة نادرة' },
-    { name: 'موكا يرغاشيف', price: 95, currency: 'SAR', category: 'قهوة مختصة' },
-    { name: 'بلندر قهوة', price: 55, currency: 'SAR', category: 'خلطات' },
-  ];
-
   const messages = [];
   const messagesEl = document.getElementById('guider-messages');
   const inputEl = document.getElementById('guider-input');
@@ -258,7 +269,7 @@
       const res = await fetch(BACKEND_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages, products })
+        body: JSON.stringify({ messages })
       });
       const data = await res.json();
       removeTyping();
@@ -284,12 +295,25 @@
     if (e.key === 'Enter') document.getElementById('guider-send').click();
   });
 
-  window.onload = () => {
-    const greeting = 'مرحباً! 👋 أنا Guider، مساعدك الذكي. أخبرني، إيش تبحث عنه اليوم؟';
-    addBotMessage(greeting);
-    messages.push({ role: 'assistant', content: greeting });
+  // Opening message from backend
+  window.onload = async () => {
+    showTyping();
+    try {
+      const res = await fetch(BACKEND_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: [{ role: 'user', content: 'ابدأ المحادثة بالترحيب' }] })
+      });
+      const data = await res.json();
+      removeTyping();
+      const greeting = data.reply || 'هلا! أنا أحمد من دريب اون — تحتاج مساعدة تختار قهوتك؟';
+      addBotMessage(greeting);
+      messages.push({ role: 'assistant', content: greeting });
+    } catch (err) {
+      removeTyping();
+      addBotMessage('هلا! أنا أحمد من دريب اون — تحتاج مساعدة تختار قهوتك؟');
+    }
   };
 </script>
-
 </body>
 </html>
