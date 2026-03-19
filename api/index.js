@@ -1,8 +1,6 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const https = require('https');
 const querystring = require('querystring');
-const fs = require('fs');
-const path = require('path');
 
 const SYSTEM_PROMPT = `أنت "أحمد" — باريستا محترف وخبير قهوة مختصة من فريق دريب اون. مهمتك توصيل الزبون لأنسب منتج وتكبير قيمة سلته بطريقة طبيعية وغير مباشرة.
 
@@ -96,7 +94,6 @@ CHOICES: [فاكهي 🌸] [شوكولاتي وكلاسيكي 🍫] [مغامر�
 قواعد التوصية الذكية:
 
 1. دايماً وصّي بزوج من المنتجات — مش منتج واحد:
-"توصيتي لك منتجين يكملون بعض..."
 مثال: "هامبيلا للفلتر البارد الفاكهي، وقوجي كورما لما تبي نكهة أعمق — كثير زباين يخذون الاثنين"
 
 2. اعرض الكيلو أول، مش 250g:
@@ -104,14 +101,14 @@ CHOICES: [فاكهي 🌸] [شوكولاتي وكلاسيكي 🍫] [مغامر�
 CHOICES: [كيلو كامل ✅] [250g للتجربة]
 
 3. بعد التوصية، اذكر البكج المناسب بجملة واحدة طبيعية:
-- لو فاكهي: "وعندنا بكج الإثيوبيات بـ 189 SAR — 3 نكهات بسعر أحسن من لو اشتريتهم منفردين"
-- لو مغامرة: "وعندنا بكج المحاصيل الفاخرة بـ 182 SAR لو تبي تجرب أكثر"
+- لو فاكهي: "وعندنا بكج الإثيوبيات بـ 189 SAR — 3 نكهات بسعر أحسن"
+- لو مغامرة: "وعندنا بكج المحاصيل الفاخرة بـ 182 SAR"
 - لو إسبريسو: "وعندنا بكج إسبريسو وتقطير بـ 157 SAR"
 
-4. للمنتجات اللاهوائية، أضف جملة شحّ طبيعية:
+4. للمنتجات اللاهوائية أضف جملة شح طبيعية:
 "اليمن اللاهوائي كميات محدودة هالموسم — ما يجي دايماً"
 
-5. لا تلح أبداً — كل upsell في جملة واحدة فقط، ثم اسكت وخلّ الزبون يقرر
+5. لا تلح أبداً — كل upsell في جملة واحدة فقط ثم اسكت
 
 قواعد ثابتة:
 - سؤال واحد فقط في كل رسالة
@@ -146,12 +143,9 @@ module.exports = async (req, res) => {
 
   const urlPath = req.url.split('?')[0];
 
-  // Serve widget.js
+  // Serve widget.js via CDN redirect
   if (urlPath === '/widget.js' && req.method === 'GET') {
-    const widgetPath = path.join(__dirname, 'public/widget.js');
-    const content = fs.readFileSync(widgetPath, 'utf8');
-    res.setHeader('Content-Type', 'application/javascript');
-    return res.send(content);
+    return res.redirect(301, 'https://cdn.jsdelivr.net/gh/ahmedbinmahfoud-glitch/guider-app@main/api/public/widget.js');
   }
 
   // OAuth callback
