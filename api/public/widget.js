@@ -203,7 +203,7 @@
 
     if (messages.length === 0) {
       setTimeout(() => {
-        const welcome = 'هلا! انا احمد من دريب اون — تحتاج مساعدة تختار قهوتك؟\nCHOICES: [أيوه ساعدني 😊] [بتفرج بس 👀]';
+        const welcome = 'هلا! انا احمد من دريب اون — تحتاج مساعدة تختار قهوتك؟\nCHOICES: [نعم ساعدني 😊] [بتفرج بس 👀]';
         addMessage(welcome, 'assistant');
         messages.push({ role: 'assistant', content: welcome });
       }, 300);
