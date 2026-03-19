@@ -9,11 +9,16 @@
   "routes": [
     {
       "src": "/demo",
-      "dest": "/public/guider-ahmed-v2.html"
+      "dest": "/api/public/guider-ahmed-v2.html"
     },
     {
       "src": "/widget.js",
-      "dest": "/api/public/widget.js"
+      "dest": "/api/public/widget.js",
+      "continue": true,
+      "headers": {
+        "content-type": "application/javascript; charset=utf-8",
+        "cache-control": "public, max-age=3600"
+      }
     },
     {
       "src": "/api/salla/callback",
