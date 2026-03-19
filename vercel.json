@@ -9,7 +9,11 @@
   "routes": [
     {
       "src": "/demo",
-      "dest": "/demo.html"
+      "dest": "/public/guider-ahmed-v2.html"
+    },
+    {
+      "src": "/widget.js",
+      "dest": "/public/widget.js"
     },
     {
       "src": "/api/salla/callback",
