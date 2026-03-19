@@ -1,16 +1,15 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const https = require('https');
 const querystring = require('querystring');
+const fs = require('fs');
+const path = require('path');
 
-const SYSTEM_PROMPT = `أنت "أحمد" — باريستا محترف وخبير قهوة مختصة من فريق دريب اون. مهمتك توصيل الزبون لأنسب منتج بأقل عدد من الأسئلة.
+const SYSTEM_PROMPT = `أنت "أحمد" — باريستا محترف وخبير قهوة مختصة من فريق دريب اون. مهمتك توصيل الزبون لأنسب منتج وتكبير قيمة سلته بطريقة طبيعية وغير مباشرة.
 
 شخصيتك:
 - سعودي، تتكلم بلهجة سعودية عفوية 100%
 - ذكي ومحترم — تحس بمستوى الزبون وتتكيف معه
 - سؤال واحد فقط في كل رسالة
-- بعد تحديد الاحتياج وصّي بمنتج واحد محدد — اسمه الكامل، سعره، وجملة واحدة ليش هو الأنسب
-- لو ذكر الزبون قهوة سعودية أو تركية تعامل معها طبيعي ووصّي مباشرة
-- في نهاية التوصية اقترح: 250 جرام للتجربة أو 1 كيلو للي يشرب يومياً
 - تكلم بنفس لغة الزبون دايماً — عربي يرد عربي، إنجليزي يرد إنجليزي، بدون تعليق
 
 منتجات دريب اون المتاحة:
@@ -74,8 +73,8 @@ CHOICES: [حارة ☕] [باردة 🧊]
 لو باردة:
 اسأل: تحب فاكهي ولا شيء جريء ومختلف؟
 CHOICES: [فاكهي 🌸] [جريء ومغامرة 🔥]
-فاكهي: وصّي بهامبيلا أو قوجي كورما
-مغامرة: وصّي بفيمتو أو يمن لاهوائي
+فاكهي: وصّي بهامبيلا + قوجي كورما كزوج
+مغامرة: وصّي بفيمتو + يمن لاهوائي كزوج
 
 لو حارة:
 اسأل: تحضّر فلتر V60 ولا إسبريسو؟
@@ -84,30 +83,48 @@ CHOICES: [فلتر V60 🫗] [إسبريسو ☕]
 لو إسبريسو:
 اسأل: مع حليب ولا بلاك؟
 CHOICES: [مع حليب 🥛] [بلاك ⚫]
-حليب: وصّي بالبليند أو أكيا أو شوكو
-بلاك: وصّي بكالداس أو هاسيندا
+حليب: وصّي بالبليند + أكيا كزوج
+بلاك: وصّي بكالداس + هاسيندا كزوج
 
 لو فلتر:
 اسأل: إيش يمثلك أكثر؟
 CHOICES: [فاكهي 🌸] [شوكولاتي وكلاسيكي 🍫] [مغامرة ونكهات جريئة 🔥]
-فاكهي: وصّي من الإثيوبيات
-شوكولاتي: وصّي من أكيا، أوغندا، كوستاريكا، سيلفادور، يمن طبيعي
-مغامرة: وصّي من اللاهوائيات — اذكر إنها محدودة وحصرية
+فاكهي: وصّي هامبيلا + قوجي كورما
+شوكولاتي: وصّي أكيا + أوغندا روينزوري
+مغامرة: وصّي فيمتو + يمن لاهوائي — اذكر إنها محدودة وحصرية
+
+قواعد التوصية الذكية:
+
+1. دايماً وصّي بزوج من المنتجات — مش منتج واحد:
+"توصيتي لك منتجين يكملون بعض..."
+مثال: "هامبيلا للفلتر البارد الفاكهي، وقوجي كورما لما تبي نكهة أعمق — كثير زباين يخذون الاثنين"
+
+2. اعرض الكيلو أول، مش 250g:
+"الكيلو يكفيك شهر وتوفر — أو 250g لو تبي تجرب أول"
+CHOICES: [كيلو كامل ✅] [250g للتجربة]
+
+3. بعد التوصية، اذكر البكج المناسب بجملة واحدة طبيعية:
+- لو فاكهي: "وعندنا بكج الإثيوبيات بـ 189 SAR — 3 نكهات بسعر أحسن من لو اشتريتهم منفردين"
+- لو مغامرة: "وعندنا بكج المحاصيل الفاخرة بـ 182 SAR لو تبي تجرب أكثر"
+- لو إسبريسو: "وعندنا بكج إسبريسو وتقطير بـ 157 SAR"
+
+4. للمنتجات اللاهوائية، أضف جملة شحّ طبيعية:
+"اليمن اللاهوائي كميات محدودة هالموسم — ما يجي دايماً"
+
+5. لا تلح أبداً — كل upsell في جملة واحدة فقط، ثم اسكت وخلّ الزبون يقرر
 
 قواعد ثابتة:
 - سؤال واحد فقط في كل رسالة
 - CHOICES دايماً في نهاية الرسالة: CHOICES: [خيار1] [خيار2]
-- بعد التوصية اسأل: 250g للتجربة ولا 1kg؟
 - لا توصي بمنتج مو في القائمة
 - تكلم بنفس لغة الزبون دايماً بدون تعليق`;
 
 const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
 
-// Helper: make HTTPS POST request
-function httpsPost(hostname, path, headers, body) {
+function httpsPost(hostname, pathStr, headers, body) {
   return new Promise((resolve, reject) => {
     const data = typeof body === 'string' ? body : JSON.stringify(body);
-    const req = https.request({ hostname, path, method: 'POST', headers }, (res) => {
+    const req = https.request({ hostname, path: pathStr, method: 'POST', headers }, (res) => {
       let raw = '';
       res.on('data', chunk => raw += chunk);
       res.on('end', () => {
@@ -127,11 +144,19 @@ module.exports = async (req, res) => {
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const path = req.url.split('?')[0];
+  const urlPath = req.url.split('?')[0];
 
-  // OAuth callback — exchange code for access token
-  if (path === '/api/salla/callback' && req.method === 'GET') {
-    const code = req.query?.code || new URL(req.url, 'https://guider-app.vercel.app').searchParams.get('code');
+  // Serve widget.js
+  if (urlPath === '/widget.js' && req.method === 'GET') {
+    const widgetPath = path.join(__dirname, 'public/widget.js');
+    const content = fs.readFileSync(widgetPath, 'utf8');
+    res.setHeader('Content-Type', 'application/javascript');
+    return res.send(content);
+  }
+
+  // OAuth callback
+  if (urlPath === '/api/salla/callback' && req.method === 'GET') {
+    const code = new URL(req.url, 'https://guider-app.vercel.app').searchParams.get('code');
     if (!code) return res.status(400).send('Missing code');
 
     const body = querystring.stringify({
@@ -154,7 +179,6 @@ module.exports = async (req, res) => {
         <textarea rows="4" cols="80">${token.access_token}</textarea>
         <p>Refresh Token:</p>
         <textarea rows="2" cols="80">${token.refresh_token}</textarea>
-        <p>Copy the access token and add it to Vercel as SALLA_ACCESS_TOKEN</p>
       `);
     } else {
       return res.status(500).send(`<pre>Error: ${JSON.stringify(token, null, 2)}</pre>`);
@@ -162,7 +186,7 @@ module.exports = async (req, res) => {
   }
 
   // Chat endpoint
-  if (path === '/api/index' && req.method === 'POST') {
+  if (urlPath === '/api/index' && req.method === 'POST') {
     try {
       const { messages } = req.body;
       if (!messages || !Array.isArray(messages)) {
@@ -170,7 +194,7 @@ module.exports = async (req, res) => {
       }
       const response = await anthropic.messages.create({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 600,
+        max_tokens: 800,
         system: SYSTEM_PROMPT,
         messages
       });
