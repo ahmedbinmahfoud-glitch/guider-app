@@ -1,4 +1,6 @@
 const Anthropic = require('@anthropic-ai/sdk');
+const https = require('https');
+const querystring = require('querystring');
 
 const SYSTEM_PROMPT = `أنت "أحمد" — باريستا محترف وخبير قهوة مختصة من فريق دريب اون. مهمتك توصيل الزبون لأنسب منتج بأقل عدد من الأسئلة.
 
@@ -101,30 +103,83 @@ CHOICES: [فاكهي 🌸] [شوكولاتي وكلاسيكي 🍫] [مغامر�
 
 const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
 
+// Helper: make HTTPS POST request
+function httpsPost(hostname, path, headers, body) {
+  return new Promise((resolve, reject) => {
+    const data = typeof body === 'string' ? body : JSON.stringify(body);
+    const req = https.request({ hostname, path, method: 'POST', headers }, (res) => {
+      let raw = '';
+      res.on('data', chunk => raw += chunk);
+      res.on('end', () => {
+        try { resolve(JSON.parse(raw)); } catch { resolve(raw); }
+      });
+    });
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
+}
+
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  try {
-    const { messages } = req.body;
-    if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({ error: 'messages array required' });
-    }
+  const path = req.url.split('?')[0];
 
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 600,
-      system: SYSTEM_PROMPT,
-      messages
+  // OAuth callback — exchange code for access token
+  if (path === '/api/salla/callback' && req.method === 'GET') {
+    const code = req.query?.code || new URL(req.url, 'https://guider-app.vercel.app').searchParams.get('code');
+    if (!code) return res.status(400).send('Missing code');
+
+    const body = querystring.stringify({
+      grant_type: 'authorization_code',
+      code,
+      client_id: process.env.SALLA_CLIENT_ID,
+      client_secret: process.env.SALLA_CLIENT_SECRET,
+      redirect_uri: 'https://guider-app.vercel.app/api/salla/callback'
     });
 
-    res.json({ reply: response.content[0].text });
-  } catch (err) {
-    console.error('Chat error:', err);
-    res.status(500).json({ error: err.message });
+    const token = await httpsPost('accounts.salla.sa', '/oauth2/token', {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Content-Length': Buffer.byteLength(body)
+    }, body);
+
+    if (token.access_token) {
+      return res.send(`
+        <h2>✅ Connected!</h2>
+        <p>Access Token:</p>
+        <textarea rows="4" cols="80">${token.access_token}</textarea>
+        <p>Refresh Token:</p>
+        <textarea rows="2" cols="80">${token.refresh_token}</textarea>
+        <p>Copy the access token and add it to Vercel as SALLA_ACCESS_TOKEN</p>
+      `);
+    } else {
+      return res.status(500).send(`<pre>Error: ${JSON.stringify(token, null, 2)}</pre>`);
+    }
   }
+
+  // Chat endpoint
+  if (path === '/api/index' && req.method === 'POST') {
+    try {
+      const { messages } = req.body;
+      if (!messages || !Array.isArray(messages)) {
+        return res.status(400).json({ error: 'messages array required' });
+      }
+      const response = await anthropic.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 600,
+        system: SYSTEM_PROMPT,
+        messages
+      });
+      return res.json({ reply: response.content[0].text });
+    } catch (err) {
+      console.error('Chat error:', err);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  return res.status(404).json({ error: 'Not found' });
 };
