@@ -135,11 +135,10 @@ CHOICES: [نعم ساعدني 😊] [بتفرج بس 👀]
 
 لو نعم ساعدني:
 كيف تحضر قهوتك؟
-CHOICES: [إسبريسو ☕] [فلتر V60 🫗] [ما أعرف ساعدني 🤷]
+CHOICES: [إسبريسو ☕] [فلتر V60 🫗] [كولد برو 🧊] [ما أعرف ساعدني 🤷]
 
 --- مسار الإسبريسو ---
-
-اسأل: كيف تحب قهوتك مع الحليب؟
+اسأل: كيف تحب قهوتك؟
 CHOICES: [مع حليب 🥛] [بلاك ⚫]
 
 لو مع حليب:
@@ -150,12 +149,11 @@ CHOICES: [ناعم وكلاسيكي ☕] [أثقل وأجرأ 🔥]
 
 لو بلاك:
 اسأل: تحب كوب نظيف ومتوازن ولا عميق وثقيل؟
-CHOICES: [نظيف ومتوازن 🎯] [عميق وثقيل 🌋]
+CHOICES: [نظيف ومتوازن ☕] [عميق وثقيل 🌋]
 نظيف → وصّي بهاسيندا كافيتيرا
 عميق → وصّي بكالداس + يمن حراز طبيعي
 
 --- مسار الفلتر V60 ---
-
 اسأل: كيف تحب قهوتك؟
 CHOICES: [فاكهية ومنعشة 🌸] [كلاسيكية وغنية 🍂] [جريئة ومفاجئة 🔥]
 
@@ -177,15 +175,13 @@ CHOICES: [توت وكرز 🍒] [استوائية وغريبة 🌴]
 توت وكرز → وصّي بفيمتو + ريد فروت
 استوائية → وصّي بيمن لاهوائي + كوكونت ليمونيد
 
---- مسار الكولد برو (فقط إذا سأل الزبون) ---
-
+--- مسار الكولد برو ---
 اسأل: كيف تحب مشروبك البارد؟
 CHOICES: [فاكهي ومنعش 🌸] [جريء ومختلف 🔥]
 فاكهي → وصّي بهامبيلا + قوجي كورما
 جريء → وصّي بفيمتو + يمن لاهوائي
 
 --- مسار ما أعرف ساعدني ---
-
 اسأل: وش تحب في مشروبك؟
 CHOICES: [حلو ومنعش 🌸] [قوي ويصحّي ☕] [جريء وما تتوقعه 🔥]
 حلو → وصّي بهامبيلا — الأشهر عندنا والأنسب للبداية
@@ -219,8 +215,7 @@ CHOICES: [كيلو كامل ✅] [250g للتجربة]
 - سؤال واحد فقط في كل رسالة
 - CHOICES دايماً في نهاية الرسالة فقط
 - لا توصي بمنتج مو في القائمة
-- تكلم بنفس لغة الزبون دايماً بدون تعليق
-- لا تقترح الكولد برو أبداً — إلا إذا الزبون سأل عنه بنفسه`;
+- تكلم بنفس لغة الزبون دايماً بدون تعليق`;
 
 const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
 
@@ -249,14 +244,21 @@ module.exports = async (req, res) => {
 
   const urlPath = req.url.split('?')[0];
 
+  // Serve widget.js directly from filesystem
   if (urlPath === '/widget.js' && req.method === 'GET') {
-    const widgetPath = path.join(__dirname, 'public', 'widget.js');
-    const widgetContent = fs.readFileSync(widgetPath, 'utf8');
-    res.setHeader('Content-Type', 'application/javascript');
-    res.setHeader('Cache-Control', 'no-cache');
-    return res.send(widgetContent);
+    try {
+      const widgetPath = path.join(process.cwd(), 'api', 'public', 'widget.js');
+      const widgetContent = fs.readFileSync(widgetPath, 'utf8');
+      res.setHeader('Content-Type', 'application/javascript');
+      res.setHeader('Cache-Control', 'no-cache');
+      return res.send(widgetContent);
+    } catch (err) {
+      // Fallback to CDN if file read fails
+      return res.redirect(301, 'https://cdn.jsdelivr.net/gh/ahmedbinmahfoud-glitch/guider-app@main/api/public/widget.js');
+    }
   }
 
+  // OAuth callback
   if (urlPath === '/api/salla/callback' && req.method === 'GET') {
     const code = new URL(req.url, 'https://guider-app.vercel.app').searchParams.get('code');
     if (!code) return res.status(400).send('Missing code');
@@ -287,6 +289,7 @@ module.exports = async (req, res) => {
     }
   }
 
+  // Chat endpoint
   if (urlPath === '/api/index' && req.method === 'POST') {
     try {
       const { messages } = req.body;
