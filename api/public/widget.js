@@ -192,6 +192,15 @@
 
   function openWidget() {
     widget.classList.add('open');
+
+    // Google Analytics tracking
+    if (typeof gtag !== 'undefined') {
+      gtag('event', 'guider_opened', {
+        event_category: 'Guider',
+        event_label: 'Widget Opened'
+      });
+    }
+
     if (messages.length === 0) {
       setTimeout(() => {
         const welcome = 'هلا! انا احمد من دريب اون — تحتاج مساعدة تختار قهوتك؟\nCHOICES: [أيوه ساعدني 😊] [بتفرج بس 👀]';
