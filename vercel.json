@@ -13,7 +13,7 @@
     },
     {
       "src": "/widget.js",
-      "dest": "/public/widget.js"
+      "dest": "/api/public/widget.js"
     },
     {
       "src": "/api/salla/callback",
