@@ -177,7 +177,7 @@ CHOICES: [توت وكرز 🍒] [استوائية وغريبة 🌴]
 توت وكرز → وصّي بفيمتو + ريد فروت
 استوائية → وصّي بيمن لاهوائي + كوكونت ليمونيد
 
---- مسار الكولد برو ---
+--- مسار الكولد برو (فقط إذا سأل الزبون) ---
 
 اسأل: كيف تحب مشروبك البارد؟
 CHOICES: [فاكهي ومنعش 🌸] [جريء ومختلف 🔥]
@@ -219,8 +219,8 @@ CHOICES: [كيلو كامل ✅] [250g للتجربة]
 - سؤال واحد فقط في كل رسالة
 - CHOICES دايماً في نهاية الرسالة فقط
 - لا توصي بمنتج مو في القائمة
-- تكلم بنفس لغة الزبون دايماً بدون تعليق`;
-- لا تقترح الكولد برو أبداً — إلا إذا الزبون سأل عنه بنفسه 
+- تكلم بنفس لغة الزبون دايماً بدون تعليق
+- لا تقترح الكولد برو أبداً — إلا إذا الزبون سأل عنه بنفسه`;
 
 const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
 
@@ -249,7 +249,6 @@ module.exports = async (req, res) => {
 
   const urlPath = req.url.split('?')[0];
 
-  // Serve widget.js directly from filesystem
   if (urlPath === '/widget.js' && req.method === 'GET') {
     const widgetPath = path.join(__dirname, 'public', 'widget.js');
     const widgetContent = fs.readFileSync(widgetPath, 'utf8');
@@ -258,7 +257,6 @@ module.exports = async (req, res) => {
     return res.send(widgetContent);
   }
 
-  // OAuth callback
   if (urlPath === '/api/salla/callback' && req.method === 'GET') {
     const code = new URL(req.url, 'https://guider-app.vercel.app').searchParams.get('code');
     if (!code) return res.status(400).send('Missing code');
@@ -289,7 +287,6 @@ module.exports = async (req, res) => {
     }
   }
 
-  // Chat endpoint
   if (urlPath === '/api/index' && req.method === 'POST') {
     try {
       const { messages } = req.body;
