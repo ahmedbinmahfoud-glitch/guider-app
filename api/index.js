@@ -4,6 +4,63 @@ const querystring = require('querystring');
 const fs = require('fs');
 const path = require('path');
 
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
+
+async function logConversation(sessionId, messages, recommendation, reachedRecommendation, dropOffStep) {
+  try {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/conversations`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Prefer': 'return=minimal'
+      },
+      body: JSON.stringify({
+        session_id: sessionId,
+        store_id: 'dripon',
+        messages: messages,
+        recommendation: recommendation || null,
+        reached_recommendation: reachedRecommendation || false,
+        drop_off_step: dropOffStep || null
+      })
+    });
+    if (!response.ok) {
+      console.error('Supabase log error:', await response.text());
+    }
+  } catch (err) {
+    console.error('Logging failed:', err.message);
+  }
+}
+
+function detectRecommendation(messages) {
+  const lastAssistantMsg = [...messages].reverse().find(m => m.role === 'assistant');
+  if (!lastAssistantMsg) return { recommendation: null, reached: false };
+  const content = lastAssistantMsg.content;
+  const products = [
+    'هامبيلا', 'قوجي', 'يرقاتشيف', 'أكيا', 'روينزوري', 'ماناناسي',
+    'ريماسيلا', 'فيلا سيبرس', 'حراز', 'كالداس', 'هاسيندا', 'بليند',
+    'شوكو لاهوائي', 'فيمتو', 'ريد فروت', 'عنب', 'حبحب', 'كوتون كاندي',
+    'باشن فروت', 'جوز الهند', 'كوكونت ليمونيد'
+  ];
+  const found = products.filter(p => content.includes(p));
+  if (found.length > 0) {
+    return { recommendation: found.join(' + '), reached: true };
+  }
+  return { recommendation: null, reached: false };
+}
+
+function detectDropOffStep(messages) {
+  const userMessages = messages.filter(m => m.role === 'user');
+  const count = userMessages.length;
+  if (count === 0) return 'no_interaction';
+  if (count === 1) return 'after_welcome';
+  if (count === 2) return 'after_brewing_method';
+  if (count === 3) return 'after_taste_preference';
+  return 'after_recommendation';
+}
+
 const SYSTEM_PROMPT = `أنت "أحمد" — باريستا محترف وخبير قهوة مختصة من فريق دريب اون. مهمتك توصيل الزبون لأنسب منتج وتكبير قيمة سلته بطريقة طبيعية وغير مباشرة.
 
 شخصيتك:
@@ -253,7 +310,6 @@ module.exports = async (req, res) => {
       res.setHeader('Cache-Control', 'no-cache');
       return res.send(widgetContent);
     } catch (err) {
-      // Fallback to CDN if file read fails
       return res.redirect(301, 'https://cdn.jsdelivr.net/gh/ahmedbinmahfoud-glitch/guider-app@main/api/public/widget.js');
     }
   }
@@ -292,17 +348,29 @@ module.exports = async (req, res) => {
   // Chat endpoint
   if (urlPath === '/api/index' && req.method === 'POST') {
     try {
-      const { messages } = req.body;
+      const { messages, sessionId } = req.body;
       if (!messages || !Array.isArray(messages)) {
         return res.status(400).json({ error: 'messages array required' });
       }
+
       const response = await anthropic.messages.create({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 800,
         system: SYSTEM_PROMPT,
         messages
       });
-      return res.json({ reply: response.content[0].text });
+
+      const reply = response.content[0].text;
+      const updatedMessages = [...messages, { role: 'assistant', content: reply }];
+      const { recommendation, reached } = detectRecommendation(updatedMessages);
+      const dropOff = detectDropOffStep(updatedMessages);
+
+      // Log to Supabase (non-blocking)
+      if (sessionId) {
+        logConversation(sessionId, updatedMessages, recommendation, reached, dropOff);
+      }
+
+      return res.json({ reply });
     } catch (err) {
       console.error('Chat error:', err);
       return res.status(500).json({ error: err.message });
