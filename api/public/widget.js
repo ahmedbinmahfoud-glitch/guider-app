@@ -1,7 +1,7 @@
 (function() {
   const API = 'https://guider-app.vercel.app';
   let messages = [];
-
+  const sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9); 
   const NAVY = '#0d1f3c';
   const NAVY_DARK = '#081529';
   const GOLD = '#c8a96e';
@@ -178,7 +178,7 @@
       const res = await fetch(`${API}/api/index`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages })
+        body: JSON.stringify({ messages, sessionId })
       });
       const data = await res.json();
       typing.remove();
