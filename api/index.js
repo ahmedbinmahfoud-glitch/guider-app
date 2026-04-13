@@ -9,26 +9,48 @@ const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
 async function logConversation(sessionId, messages, recommendation, reachedRecommendation, dropOffStep) {
   try {
-    const response = await fetch(`${SUPABASE_URL}/rest/v1/conversations`, {
+    const body = JSON.stringify({
+      session_id: sessionId,
+      store_id: 'dripon',
+      messages: messages,
+      recommendation: recommendation || null,
+      reached_recommendation: reachedRecommendation || false,
+      drop_off_step: dropOffStep || null
+    });
+
+    const url = new URL(`${SUPABASE_URL}/rest/v1/conversations`);
+    
+    const options = {
+      hostname: url.hostname,
+      path: url.pathname,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'apikey': SUPABASE_KEY,
         'Authorization': `Bearer ${SUPABASE_KEY}`,
-        'Prefer': 'return=minimal'
-      },
-      body: JSON.stringify({
-        session_id: sessionId,
-        store_id: 'dripon',
-        messages: messages,
-        recommendation: recommendation || null,
-        reached_recommendation: reachedRecommendation || false,
-        drop_off_step: dropOffStep || null
-      })
+        'Prefer': 'return=minimal',
+        'Content-Length': Buffer.byteLength(body)
+      }
+    };
+
+    return new Promise((resolve) => {
+      const req = https.request(options, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          if (res.statusCode >= 400) {
+            console.error('Supabase insert error:', res.statusCode, data);
+          }
+          resolve();
+        });
+      });
+      req.on('error', (err) => {
+        console.error('Supabase request error:', err.message);
+        resolve();
+      });
+      req.write(body);
+      req.end();
     });
-    if (!response.ok) {
-      console.error('Supabase log error:', await response.text());
-    }
   } catch (err) {
     console.error('Logging failed:', err.message);
   }
