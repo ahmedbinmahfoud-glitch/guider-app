@@ -48,6 +48,196 @@ async function logConversation(sessionId, messages, recommendation, reachedRecom
   }
 }
 
+// ============================================
+// SALLA WEBHOOK HELPERS — Phase 1: Order Attribution
+// ============================================
+
+// Verify the webhook actually came from Salla using the token strategy
+function verifySallaWebhook(req) {
+  const expectedSecret = process.env.SALLA_WEBHOOK_SECRET;
+  if (!expectedSecret) {
+    console.error('SALLA_WEBHOOK_SECRET not configured');
+    return false;
+  }
+
+  // Salla sends token in Authorization header for Token strategy
+  const authHeader = req.headers['authorization'] || req.headers['Authorization'] || '';
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+
+  // Also check x-salla-signature as fallback
+  const sallaSignature = req.headers['x-salla-signature'] || '';
+
+  return token === expectedSecret || sallaSignature === expectedSecret;
+}
+
+// Extract structured order data from Salla payload
+function extractOrderData(payload) {
+  const data = payload.data || payload;
+
+  // Extract products
+  const items = data.items || data.products || [];
+  const productNames = items.map(item => item.name || item.product_name || '').filter(Boolean);
+
+  // Extract customer
+  const customer = data.customer || {};
+  const customerName = [customer.first_name, customer.last_name].filter(Boolean).join(' ').trim()
+    || customer.name
+    || null;
+
+  return {
+    salla_order_id: String(data.id || ''),
+    salla_order_reference: data.reference_id || data.order_number || null,
+
+    customer_id: customer.id ? String(customer.id) : null,
+    customer_email: customer.email || null,
+    customer_phone: customer.mobile || customer.phone || null,
+    customer_name: customerName,
+    customer_city: customer.city || (data.shipping && data.shipping.address && data.shipping.address.city) || null,
+
+    total_amount: parseFloat(data.total && data.total.amount) || parseFloat(data.amounts && data.amounts.total && data.amounts.total.amount) || 0,
+    currency: (data.total && data.total.currency) || (data.amounts && data.amounts.total && data.amounts.total.currency) || 'SAR',
+    shipping_cost: parseFloat(data.shipping_cost) || parseFloat(data.amounts && data.amounts.shipping_cost && data.amounts.shipping_cost.amount) || 0,
+
+    order_status: (data.status && data.status.name) || data.status || null,
+    payment_status: data.payment_method || (data.payment && data.payment.status) || null,
+    payment_method: data.payment_method || null,
+
+    items_count: items.length,
+    product_names: productNames
+  };
+}
+
+// Try to attribute order to a bot session
+// For Phase 1: simple time-window matching by phone/email
+async function attributeToSession(orderData) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    return { session_id: null, method: 'unknown', confidence: 'none' };
+  }
+
+  // For now, no attribution logic — orders are captured but not linked
+  // Future: query conversations table for matching customer in last 24h
+  // Future: when cart integration adds session_id to cart metadata, use direct match
+
+  return {
+    session_id: null,
+    method: 'unknown',
+    confidence: 'none'
+  };
+}
+
+// Log Salla order event to Supabase orders table
+async function logSallaOrder(eventType, payload) {
+  try {
+    const orderData = extractOrderData(payload);
+    const attribution = await attributeToSession(orderData);
+
+    const body = JSON.stringify({
+      store_id: 'dripon',
+      event_type: eventType,
+      event_timestamp: new Date().toISOString(),
+
+      salla_order_id: orderData.salla_order_id,
+      salla_order_reference: orderData.salla_order_reference,
+
+      customer_id: orderData.customer_id,
+      customer_email: orderData.customer_email,
+      customer_phone: orderData.customer_phone,
+      customer_name: orderData.customer_name,
+      customer_city: orderData.customer_city,
+
+      total_amount: orderData.total_amount,
+      currency: orderData.currency,
+      shipping_cost: orderData.shipping_cost,
+
+      order_status: orderData.order_status,
+      payment_status: orderData.payment_status,
+      payment_method: orderData.payment_method,
+
+      items_count: orderData.items_count,
+      product_names: orderData.product_names,
+
+      session_id: attribution.session_id,
+      attribution_method: attribution.method,
+      attribution_confidence: attribution.confidence,
+
+      raw_payload: payload
+    });
+
+    const url = new URL(`${SUPABASE_URL}/rest/v1/orders`);
+
+    return new Promise((resolve) => {
+      const req = https.request({
+        hostname: url.hostname,
+        path: url.pathname,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': SUPABASE_KEY,
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'Prefer': 'return=minimal',
+          'Content-Length': Buffer.byteLength(body)
+        }
+      }, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          if (res.statusCode >= 400) {
+            console.error('Supabase orders insert failed:', res.statusCode, data);
+          }
+          resolve();
+        });
+      });
+      req.on('error', (err) => {
+        console.error('Order log error:', err.message);
+        resolve();
+      });
+      req.write(body);
+      req.end();
+    });
+  } catch (err) {
+    console.error('logSallaOrder failed:', err.message);
+  }
+}
+
+// Log any other Salla event (products, customers, etc.) for future phases
+async function logSallaEvent(eventType, payload) {
+  try {
+    const body = JSON.stringify({
+      store_id: 'dripon',
+      event_type: eventType,
+      raw_payload: payload,
+      processed: false
+    });
+
+    const url = new URL(`${SUPABASE_URL}/rest/v1/salla_events`);
+
+    return new Promise((resolve) => {
+      const req = https.request({
+        hostname: url.hostname,
+        path: url.pathname,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': SUPABASE_KEY,
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'Prefer': 'return=minimal',
+          'Content-Length': Buffer.byteLength(body)
+        }
+      }, (res) => {
+        res.on('data', () => {});
+        res.on('end', () => resolve());
+      });
+      req.on('error', () => resolve());
+      req.write(body);
+      req.end();
+    });
+  } catch (err) {
+    console.error('logSallaEvent failed:', err.message);
+  }
+}
+
+// ============================================
+
 function detectRecommendation(messages) {
   const lastAssistantMsg = [...messages].reverse().find(m => m.role === 'assistant');
   if (!lastAssistantMsg) return { recommendation: null, reached: false };
@@ -839,6 +1029,45 @@ module.exports = async (req, res) => {
       return res.send(`<h2>✅ Connected!</h2><p>Access Token:</p><textarea rows="4" cols="80">${token.access_token}</textarea>`);
     } else {
       return res.status(500).send(`<pre>Error: ${JSON.stringify(token, null, 2)}</pre>`);
+    }
+  }
+
+  // ============================================
+  // SALLA WEBHOOK ENDPOINT — Phase 1
+  // Receives events: order.created, order.payment.updated, product.*, customer.*
+  // ============================================
+  if (urlPath === '/api/salla/order-webhook' && req.method === 'POST') {
+    try {
+      // Verify the request came from Salla
+      if (!verifySallaWebhook(req)) {
+        console.warn('Invalid Salla webhook token');
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+
+      const payload = req.body;
+      if (!payload || typeof payload !== 'object') {
+        return res.status(400).json({ error: 'Invalid payload' });
+      }
+
+      const eventType = payload.event || 'unknown';
+
+      // Process based on event type
+      if (eventType.startsWith('order.')) {
+        // Order events — log to orders table with full extraction
+        await logSallaOrder(eventType, payload);
+      } else {
+        // Product, customer, and other events — log to salla_events for future use
+        await logSallaEvent(eventType, payload);
+      }
+
+      // Always return 200 OK quickly so Salla doesn't retry
+      return res.status(200).json({ received: true, event: eventType });
+
+    } catch (err) {
+      console.error('Webhook handler error:', err);
+      // Still return 200 to prevent Salla from retrying infinitely
+      // We log the error but don't fail the webhook
+      return res.status(200).json({ received: true, error: err.message });
     }
   }
 
