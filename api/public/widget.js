@@ -3,7 +3,63 @@
   let messages = [];
   const sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).slice(2, 11);
 
-  // Load Cairo font from Google Fonts (proper Arabic web font)
+  // ============================================
+  // URL EXCLUSION — Don't show widget on these pages
+  // ============================================
+  const EXCLUDED_URL_PATTERNS = [
+    /\/p\d+/i,           // Product detail pages (Salla: /xxx/p1234567)
+    /\/cart/i,           // Cart page
+    /\/checkout/i,       // Checkout
+    /\/orders?\b/i,      // Order pages
+    /\/thank/i,          // Thank you / confirmation pages
+    /\/account/i,        // User account
+    /\/profile/i,        // User profile
+    /\/dashboard/i,      // User dashboard
+    /\/login/i,          // Login
+    /\/register/i,       // Register
+    /\/signup/i,         // Signup
+    /\/auth/i,           // Auth pages
+    /\/my-orders/i,      // My orders
+    /\/wishlist/i,       // Wishlist
+    /\/invoice/i,        // Invoice
+    /\/track/i,          // Order tracking
+  ];
+
+  function shouldHideWidget() {
+    const path = window.location.pathname;
+    return EXCLUDED_URL_PATTERNS.some(pattern => pattern.test(path));
+  }
+
+  // ============================================
+  // DISMISS COOLDOWN — Respect user's choice to close
+  // ============================================
+  const DISMISS_KEY = 'guider_dismissed_at';
+  const COOLDOWN_HOURS = 24;
+
+  function isInCooldown() {
+    try {
+      const dismissed = localStorage.getItem(DISMISS_KEY);
+      if (!dismissed) return false;
+      const dismissedTime = parseInt(dismissed, 10);
+      if (isNaN(dismissedTime)) return false;
+      const hoursSince = (Date.now() - dismissedTime) / (1000 * 60 * 60);
+      return hoursSince < COOLDOWN_HOURS;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function recordDismissal() {
+    try {
+      localStorage.setItem(DISMISS_KEY, Date.now().toString());
+    } catch (e) {}
+  }
+
+  // EARLY EXIT — Don't initialize if not needed
+  if (shouldHideWidget() || isInCooldown()) {
+    return;
+  }
+
   const fontLink = document.createElement('link');
   fontLink.href = 'https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&display=swap';
   fontLink.rel = 'stylesheet';
@@ -16,6 +72,10 @@
       display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
       font-family: 'Cairo', system-ui, sans-serif;
     }
+    #guider-bubble-wrap {
+      position: relative;
+      display: inline-flex;
+    }
     #guider-bubble {
       background: #0d1f3c; border-radius: 14px 14px 14px 4px;
       padding: 11px 16px; font-size: 13px; color: #fff;
@@ -27,8 +87,35 @@
       cursor: pointer;
       transition: opacity 0.3s, transform 0.3s;
     }
-    #guider-bubble.hidden {
+    #guider-bubble-close {
+      position: absolute;
+      top: -8px; left: -8px;
+      width: 24px; height: 24px;
+      border-radius: 50%;
+      background: #c8a96e;
+      color: #0d1f3c;
+      border: none;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+      transition: transform 0.2s, background 0.2s;
+      padding: 0;
+      line-height: 1;
+      z-index: 2;
+    }
+    #guider-bubble-close:hover {
+      transform: scale(1.15);
+      background: #d4b87a;
+    }
+    #guider-fab.hidden {
       opacity: 0; transform: translateY(10px); pointer-events: none;
+    }
+    #guider-bubble.hidden {
+      opacity: 0; pointer-events: none;
     }
     #guider-btn {
       width: 60px; height: 60px; border-radius: 50%;
@@ -47,7 +134,7 @@
     #guider-widget {
       position: fixed; bottom: 100px; left: 24px;
       width: 380px; height: 600px;
-      max-height: calc(100vh - 140px);
+      max-height: calc(100dvh - 140px);
       background: #fff; border-radius: 20px;
       box-shadow: 0 20px 60px rgba(13,31,60,0.3);
       z-index: 9998; display: none; flex-direction: column;
@@ -56,14 +143,13 @@
     }
     #guider-widget.open { display: flex; }
 
-    /* Mobile responsive */
     @media (max-width: 480px) {
       #guider-widget {
         width: calc(100vw - 24px);
         left: 12px; right: 12px;
-        bottom: 90px;
-        height: calc(100vh - 110px);
-        max-height: calc(100vh - 110px);
+        bottom: 12px;
+        height: calc(100dvh - 24px);
+        max-height: calc(100dvh - 24px);
       }
       #guider-fab { left: 12px; bottom: 12px; }
       #guider-bubble { max-width: 180px; font-size: 12px; }
@@ -74,13 +160,10 @@
       padding: 18px 22px; color: #fff;
       display: flex; align-items: center; justify-content: space-between;
       border-bottom: 2px solid #c8a96e;
+      flex-shrink: 0;
     }
-    #guider-header-title {
-      font-size: 16px; font-weight: 700; color: #fff;
-    }
-    #guider-header-sub {
-      font-size: 12px; opacity: 0.75; margin-top: 3px; color: #c8a96e;
-    }
+    #guider-header-title { font-size: 16px; font-weight: 700; color: #fff; }
+    #guider-header-sub { font-size: 12px; opacity: 0.75; margin-top: 3px; color: #c8a96e; }
     #guider-close {
       background: rgba(255,255,255,0.1); border: none;
       color: #fff; width: 32px; height: 32px; border-radius: 50%;
@@ -95,6 +178,7 @@
       display: flex; flex-direction: column; gap: 12px;
       background: #faf7f2;
       scroll-behavior: smooth;
+      -webkit-overflow-scrolling: touch;
     }
 
     .guider-msg-ai, .guider-msg-user {
@@ -118,11 +202,7 @@
       font-weight: 600;
     }
 
-    /* Markdown styling */
-    .guider-msg-ai strong {
-      color: #0d1f3c;
-      font-weight: 800;
-    }
+    .guider-msg-ai strong { color: #0d1f3c; font-weight: 800; }
     .guider-msg-ai .guider-link {
       display: inline-flex;
       align-items: center;
@@ -143,15 +223,11 @@
       color: #fff;
       border-color: #0d1f3c;
     }
-    /* WhatsApp links get green styling */
     .guider-msg-ai .guider-link[href*="wa.me"] {
-      background: #25d366;
-      color: #fff;
-      border-color: #25d366;
+      background: #25d366; color: #fff; border-color: #25d366;
     }
     .guider-msg-ai .guider-link[href*="wa.me"]:hover {
-      background: #1da851;
-      border-color: #1da851;
+      background: #1da851; border-color: #1da851;
     }
 
     .guider-choices {
@@ -172,7 +248,6 @@
       transform: translateY(-1px);
     }
 
-    /* Typing indicator */
     .guider-typing {
       background: #fff;
       align-self: flex-start;
@@ -193,13 +268,15 @@
     .guider-typing span:nth-child(3) { animation-delay: 0.3s; }
 
     #guider-input-row {
-      padding: 14px 16px; border-top: 1px solid #e0dbd0;
+      padding: 14px 16px;
+      border-top: 1px solid #e0dbd0;
       display: flex; gap: 8px; background: #fff;
+      flex-shrink: 0;
     }
     #guider-input {
       flex: 1; border: 1.5px solid #e0d9ce; border-radius: 12px;
       padding: 11px 14px; font-family: 'Cairo', sans-serif;
-      font-size: 14px; outline: none; direction: rtl;
+      font-size: 16px; outline: none; direction: rtl;
       transition: border-color 0.2s;
     }
     #guider-input:focus { border-color: #0d1f3c; }
@@ -221,7 +298,6 @@
       40% { transform: translateY(-6px); opacity: 1; }
     }
 
-    /* Scrollbar */
     #guider-messages::-webkit-scrollbar { width: 6px; }
     #guider-messages::-webkit-scrollbar-track { background: transparent; }
     #guider-messages::-webkit-scrollbar-thumb {
@@ -233,7 +309,10 @@
 
   document.body.insertAdjacentHTML('beforeend', `
     <div id="guider-fab">
-      <div id="guider-bubble">☕ خلني أرشّحلك قهوتك</div>
+      <div id="guider-bubble-wrap">
+        <button id="guider-bubble-close" aria-label="إخفاء">✕</button>
+        <div id="guider-bubble">☕ خلني أرشّحلك قهوتك</div>
+      </div>
       <button id="guider-btn" aria-label="فتح أحمد باريستا">☕</button>
     </div>
     <div id="guider-widget">
@@ -253,38 +332,30 @@
   `);
 
   const widget = document.getElementById('guider-widget');
+  const fab = document.getElementById('guider-fab');
   const bubble = document.getElementById('guider-bubble');
+  const bubbleClose = document.getElementById('guider-bubble-close');
   const messagesEl = document.getElementById('guider-messages');
   const input = document.getElementById('guider-input');
 
-  // Markdown renderer — converts **bold**, [text](url), and line breaks
   function renderMarkdown(text) {
     let html = text;
-    // Escape HTML first (XSS protection)
     html = html.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    // Bold: **text** → <strong>text</strong>
     html = html.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>');
-    // Links: [text](url) → <a>
     html = html.replace(
       /\[([^\]]+)\]\(([^)]+)\)/g,
       '<a href="$2" target="_blank" rel="noopener" class="guider-link">$1</a>'
     );
-    // Line breaks
     html = html.replace(/\n/g, '<br>');
     return html;
   }
 
-  // Parse choices from text — only after CHOICES: marker, ignore markdown link brackets
   function parseChoices(text) {
     const choicesIndex = text.indexOf('CHOICES:');
     if (choicesIndex === -1) return { text, choices: [] };
-
     const messageText = text.substring(0, choicesIndex).trim();
     const choicesPart = text.substring(choicesIndex);
-
-    // Match [text] but NOT [text](url) (markdown links)
     const choices = [...choicesPart.matchAll(/\[([^\]]+)\](?!\()/g)].map(m => m[1]);
-
     return { text: messageText, choices };
   }
 
@@ -323,7 +394,6 @@
     addMessage(msg, 'user');
     messages.push({ role: 'user', content: msg });
 
-    // Animated typing indicator (3 bouncing dots)
     const typing = document.createElement('div');
     typing.className = 'guider-typing';
     typing.innerHTML = '<span></span><span></span><span></span>';
@@ -348,7 +418,7 @@
 
   function openWidget() {
     widget.classList.add('open');
-    bubble.classList.add('hidden');
+    fab.classList.add('hidden');
 
     if (typeof gtag !== 'undefined') {
       gtag('event', 'guider_opened', {
@@ -359,20 +429,41 @@
 
     if (messages.length === 0) {
       setTimeout(() => {
-        const welcome = 'مرحباً! كيف تحب قهوتك اليوم؟\nCHOICES: [مع الحليب 🥛] [بلاك حار ☕] [بلاك بارد ❄️] [ما أعرف، ساعدني 🤷]';
+        const welcome = 'مرحباً! كيف تحب قهوتك اليوم؟\nCHOICES: [مع الحليب 🥛] [إسبريسو بلاك ☕] [فلتر V60 🫗] [بارد ❄️] [ما أعرف 🤷]';
         addMessage(welcome, 'assistant');
         messages.push({ role: 'assistant', content: welcome });
       }, 300);
     }
+
+    setTimeout(() => {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }, 400);
   }
 
   function closeWidget() {
     widget.classList.remove('open');
-    // Bubble stays hidden — user knows widget exists, no need to keep nagging
   }
 
-  // Bubble click also opens widget (better UX than only the button)
+  function dismissBubblePermanently() {
+    recordDismissal();
+    fab.classList.add('hidden');
+    setTimeout(() => {
+      fab.style.display = 'none';
+    }, 300);
+  }
+
+  // Mobile keyboard fix
+  input.addEventListener('focus', () => {
+    setTimeout(() => {
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }, 300);
+  });
+
   bubble.onclick = openWidget;
+  bubbleClose.onclick = (e) => {
+    e.stopPropagation();
+    dismissBubblePermanently();
+  };
   document.getElementById('guider-btn').onclick = openWidget;
   document.getElementById('guider-close').onclick = closeWidget;
   document.getElementById('guider-send').onclick = () => sendMessage();
