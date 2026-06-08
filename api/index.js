@@ -1283,6 +1283,90 @@ module.exports = async (req, res) => {
     }
   }
 
+  // ============================================
+  // TEST ENDPOINT — Verify Salla API works with stored token
+  // GET /api/test/salla
+  // ============================================
+  if (urlPath === '/api/test/salla' && req.method === 'GET') {
+    try {
+      // Step 1: Get the active store from Supabase
+      const storeUrl = new URL(`${SUPABASE_URL}/rest/v1/stores?is_active=eq.true&limit=1`);
+      const storeData = await new Promise((resolve, reject) => {
+        https.get({
+          hostname: storeUrl.hostname,
+          path: storeUrl.pathname + storeUrl.search,
+          headers: {
+            'apikey': SUPABASE_KEY,
+            'Authorization': `Bearer ${SUPABASE_KEY}`,
+            'Accept': 'application/json'
+          }
+        }, (r) => {
+          let data = '';
+          r.on('data', c => data += c);
+          r.on('end', () => {
+            try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
+          });
+        }).on('error', reject);
+      });
+
+      if (!storeData || storeData.length === 0) {
+        return res.status(404).send('<pre>No active store found in Supabase</pre>');
+      }
+
+      const store = storeData[0];
+
+      // Step 2: Call Salla products API with the stored token
+      const products = await httpsGet('api.salla.dev', '/admin/v2/products?per_page=10', {
+        'Authorization': `Bearer ${store.access_token}`,
+        'Accept': 'application/json'
+      });
+
+      const productCount = products && products.data ? products.data.length : 0;
+      const productNames = (products && products.data ? products.data : []).map(p => p.name).slice(0, 10);
+
+      // Step 3: Show results
+      return res.send(`
+        <!DOCTYPE html>
+        <html dir="rtl" lang="ar">
+        <head>
+          <meta charset="UTF-8">
+          <title>Salla API Test</title>
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; background: #f5f5f7; }
+            .card { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+            h1 { margin: 0 0 20px; color: #1d1d1f; }
+            .info { background: #e8f5e9; padding: 15px; border-radius: 8px; margin: 15px 0; }
+            .info p { margin: 5px 0; }
+            ul { padding-right: 20px; line-height: 1.8; }
+            pre { background: #f5f5f7; padding: 15px; border-radius: 8px; overflow-x: auto; font-size: 12px; max-height: 400px; direction: ltr; text-align: left; }
+            .ok { color: #2e7d32; font-weight: bold; }
+            .err { color: #c62828; font-weight: bold; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <h1>🧪 Salla API Test</h1>
+            <div class="info">
+              <p><b>Store:</b> ${store.store_name || 'unknown'} (ID: ${store.salla_store_id})</p>
+              <p><b>Domain:</b> ${store.store_domain || 'n/a'}</p>
+              <p><b>Token expires:</b> ${store.expires_at || 'n/a'}</p>
+              <p class="${productCount > 0 ? 'ok' : 'err'}"><b>${productCount > 0 ? '✅' : '❌'} Products found:</b> ${productCount}</p>
+            </div>
+            ${productCount > 0 ? `
+              <h3>First ${productCount} product names:</h3>
+              <ul>${productNames.map(n => `<li>${n}</li>`).join('')}</ul>
+            ` : ''}
+            <h3>Raw API response (truncated):</h3>
+            <pre>${JSON.stringify(products, null, 2).slice(0, 3000)}</pre>
+          </div>
+        </body>
+        </html>
+      `);
+    } catch (err) {
+      return res.status(500).send(`<pre>Test error: ${err.message}\n${err.stack}</pre>`);
+    }
+  }
+
   if (urlPath === '/api/index' && req.method === 'POST') {
     try {
       const { messages, sessionId } = req.body;
