@@ -108,15 +108,10 @@ function extractOrderData(payload) {
 }
 
 // Try to attribute order to a bot session
-// For Phase 1: simple time-window matching by phone/email
 async function attributeToSession(orderData) {
   if (!SUPABASE_URL || !SUPABASE_KEY) {
     return { session_id: null, method: 'unknown', confidence: 'none' };
   }
-
-  // For now, no attribution logic — orders are captured but not linked
-  // Future: query conversations table for matching customer in last 24h
-  // Future: when cart integration adds session_id to cart metadata, use direct match
 
   return {
     session_id: null,
@@ -234,6 +229,61 @@ async function logSallaEvent(eventType, payload) {
   } catch (err) {
     console.error('logSallaEvent failed:', err.message);
   }
+}
+
+// ============================================
+// OAUTH HELPERS — Token storage & store registration
+// ============================================
+
+function httpsGet(hostname, pathStr, headers) {
+  return new Promise((resolve, reject) => {
+    const req = https.request({ hostname, path: pathStr, method: 'GET', headers }, (res) => {
+      let raw = '';
+      res.on('data', chunk => raw += chunk);
+      res.on('end', () => {
+        try { resolve(JSON.parse(raw)); } catch { resolve(raw); }
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+async function saveStoreToken(storeData) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify(storeData);
+    const url = new URL(`${SUPABASE_URL}/rest/v1/stores`);
+
+    const req = https.request({
+      hostname: url.hostname,
+      path: url.pathname + '?on_conflict=salla_store_id',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Prefer': 'resolution=merge-duplicates,return=minimal',
+        'Content-Length': Buffer.byteLength(body)
+      }
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        if (res.statusCode >= 400) {
+          console.error('Store save failed:', res.statusCode, data);
+          reject(new Error(`Supabase error ${res.statusCode}: ${data}`));
+        } else {
+          resolve();
+        }
+      });
+    });
+    req.on('error', (err) => {
+      console.error('Store save network error:', err.message);
+      reject(err);
+    });
+    req.write(body);
+    req.end();
+  });
 }
 
 // ============================================
@@ -1069,37 +1119,144 @@ module.exports = async (req, res) => {
     }
   }
 
+  // ============================================
+  // OAUTH CALLBACK — UPDATED: Exchanges code, fetches store info, saves to Supabase
+  // ============================================
   if (urlPath === '/api/salla/callback' && req.method === 'GET') {
     const code = new URL(req.url, 'https://guider-app.vercel.app').searchParams.get('code');
-    if (!code) return res.status(400).send('Missing code');
+    if (!code) return res.status(400).send('Missing authorization code');
 
-    const body = querystring.stringify({
-      grant_type: 'authorization_code',
-      code,
-      client_id: process.env.SALLA_CLIENT_ID,
-      client_secret: process.env.SALLA_CLIENT_SECRET,
-      redirect_uri: 'https://guider-app.vercel.app/api/salla/callback'
-    });
+    try {
+      // Step 1: Exchange authorization code for access token
+      const tokenBody = querystring.stringify({
+        grant_type: 'authorization_code',
+        code,
+        client_id: process.env.SALLA_CLIENT_ID,
+        client_secret: process.env.SALLA_CLIENT_SECRET,
+        redirect_uri: 'https://guider-app.vercel.app/api/salla/callback'
+      });
 
-    const token = await httpsPost('accounts.salla.sa', '/oauth2/token', {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Content-Length': Buffer.byteLength(body)
-    }, body);
+      const tokenResponse = await httpsPost('accounts.salla.sa', '/oauth2/token', {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': Buffer.byteLength(tokenBody)
+      }, tokenBody);
 
-    if (token.access_token) {
-      return res.send(`<h2>✅ Connected!</h2><p>Access Token:</p><textarea rows="4" cols="80">${token.access_token}</textarea>`);
-    } else {
-      return res.status(500).send(`<pre>Error: ${JSON.stringify(token, null, 2)}</pre>`);
+      if (!tokenResponse.access_token) {
+        console.error('Token exchange failed:', tokenResponse);
+        return res.status(500).send(`<pre>Token exchange error:\n${JSON.stringify(tokenResponse, null, 2)}</pre>`);
+      }
+
+      const accessToken = tokenResponse.access_token;
+      const refreshToken = tokenResponse.refresh_token || null;
+      const expiresIn = tokenResponse.expires_in || null;
+      const scope = tokenResponse.scope || null;
+
+      // Step 2: Fetch store info from Salla API
+      let storeId = null;
+      let storeName = null;
+      let storeDomain = null;
+      let plan = 'free';
+
+      try {
+        const storeInfo = await httpsGet('api.salla.dev', '/admin/v2/store/info', {
+          'Authorization': `Bearer ${accessToken}`,
+          'Accept': 'application/json'
+        });
+
+        if (storeInfo && storeInfo.data) {
+          storeId = String(storeInfo.data.id || '');
+          storeName = storeInfo.data.name || null;
+          storeDomain = storeInfo.data.domain || null;
+          plan = storeInfo.data.plan || 'free';
+        }
+      } catch (infoErr) {
+        console.error('Store info fetch failed (continuing anyway):', infoErr.message);
+      }
+
+      if (!storeId) {
+        storeId = `unknown_${Date.now()}`;
+      }
+
+      // Step 3: Calculate token expiration
+      const expiresAt = expiresIn
+        ? new Date(Date.now() + expiresIn * 1000).toISOString()
+        : null;
+
+      // Step 4: Save to Supabase stores table (upsert)
+      try {
+        await saveStoreToken({
+          salla_store_id: storeId,
+          store_name: storeName,
+          store_domain: storeDomain,
+          access_token: accessToken,
+          refresh_token: refreshToken,
+          expires_at: expiresAt,
+          scope: scope,
+          is_active: true,
+          plan: plan,
+          installed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        });
+        console.log('✅ Store token saved:', storeId, storeName);
+      } catch (dbErr) {
+        console.error('❌ Failed to save store token to DB:', dbErr.message);
+        return res.status(500).send(`
+          <html dir="rtl"><body style="font-family:sans-serif;padding:40px;max-width:600px;margin:auto">
+            <h2>⚠️ التثبيت جزئي</h2>
+            <p>تم استلام التوكن من سلة لكن فشل حفظه في قاعدة البيانات.</p>
+            <p><b>Store ID:</b> ${storeId}</p>
+            <p><b>Error:</b> ${dbErr.message}</p>
+          </body></html>
+        `);
+      }
+
+      // Step 5: Show success page
+      return res.send(`
+        <!DOCTYPE html>
+        <html dir="rtl" lang="ar">
+        <head>
+          <meta charset="UTF-8">
+          <title>تم التثبيت بنجاح</title>
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; background: #f5f5f7; }
+            .card { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); text-align: center; }
+            h1 { color: #1d1d1f; margin: 10px 0 20px; }
+            .success { font-size: 64px; margin: 0; }
+            .info { background: #f5f5f7; padding: 20px; border-radius: 8px; margin: 20px 0; text-align: right; }
+            .info p { margin: 8px 0; color: #1d1d1f; }
+            .info b { color: #515154; }
+            code { background: #e5e5ea; padding: 2px 8px; border-radius: 4px; font-size: 13px; font-family: monospace; }
+            .note { color: #86868b; font-size: 14px; margin-top: 30px; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <div class="success">✅</div>
+            <h1>تم تثبيت Guider بنجاح</h1>
+            <p>تم ربط متجرك بـGuider. كل البيانات محفوظة بشكل آمن في قاعدة البيانات.</p>
+            <div class="info">
+              <p><b>المتجر:</b> ${storeName || 'غير معروف'}</p>
+              <p><b>معرف المتجر:</b> <code>${storeId}</code></p>
+              <p><b>الباقة:</b> ${plan}</p>
+              <p><b>تاريخ التثبيت:</b> ${new Date().toLocaleString('en-GB', { timeZone: 'Asia/Riyadh' })}</p>
+            </div>
+            <p class="note">تقدر تغلق هذه الصفحة وترجع لمتجرك.</p>
+          </div>
+        </body>
+        </html>
+      `);
+
+    } catch (err) {
+      console.error('OAuth callback error:', err);
+      return res.status(500).send(`<pre>Callback error: ${err.message}\n${err.stack}</pre>`);
     }
   }
 
   // ============================================
   // SALLA WEBHOOK ENDPOINT — Phase 1
-  // Receives events: order.created, order.payment.updated, product.*, customer.*
   // ============================================
   if (urlPath === '/api/salla/order-webhook' && req.method === 'POST') {
     try {
-      // Verify the request came from Salla
       if (!verifySallaWebhook(req)) {
         console.warn('Invalid Salla webhook token');
         return res.status(401).json({ error: 'Unauthorized' });
@@ -1112,22 +1269,16 @@ module.exports = async (req, res) => {
 
       const eventType = payload.event || 'unknown';
 
-      // Process based on event type
       if (eventType.startsWith('order.')) {
-        // Order events — log to orders table with full extraction
         await logSallaOrder(eventType, payload);
       } else {
-        // Product, customer, and other events — log to salla_events for future use
         await logSallaEvent(eventType, payload);
       }
 
-      // Always return 200 OK quickly so Salla doesn't retry
       return res.status(200).json({ received: true, event: eventType });
 
     } catch (err) {
       console.error('Webhook handler error:', err);
-      // Still return 200 to prevent Salla from retrying infinitely
-      // We log the error but don't fail the webhook
       return res.status(200).json({ received: true, error: err.message });
     }
   }
@@ -1139,8 +1290,6 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: 'messages array required' });
       }
 
-      // Prompt caching — system prompt is cached for ~5 min
-      // Cached tokens cost ~10% of normal, and response is faster
       const response = await anthropic.messages.create({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 800,
