@@ -1,7 +1,25 @@
+// ============================================================
+// widget.js — ONLY CHANGE vs your current file: sessionId now
+// survives page navigation via sessionStorage (lines 3-8).
+// Everything else is byte-identical to what you're running.
+// ============================================================
 (function() {
   const API = 'https://guider-app.vercel.app';
   let messages = [];
-  const sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).slice(2, 11);
+
+  // Persist the session across page loads so one customer = one conversation.
+  // Was: a fresh id on every page load, which inflated conversation counts
+  // and made order attribution impossible.
+  let sessionId;
+  try {
+    sessionId = sessionStorage.getItem('guider_sid');
+    if (!sessionId) {
+      sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).slice(2, 11);
+      sessionStorage.setItem('guider_sid', sessionId);
+    }
+  } catch (e) {
+    sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).slice(2, 11);
+  }
 
   // ============================================
   // URL EXCLUSION — Don't show widget on these pages
