@@ -238,9 +238,12 @@ async function logConversation(sessionId, messages, recommendation, reachedRecom
       const req = https.request(options, (res) => {
         let data = '';
         res.on('data', chunk => data += chunk);
-        res.on('end', () => { resolve(); });
+        res.on('end', () => {
+          if (res.statusCode >= 300) console.error('logConversation failed:', res.statusCode, data.slice(0, 200));
+          resolve();
+        });
       });
-      req.on('error', () => { resolve(); });
+      req.on('error', (err) => { console.error('logConversation error:', err.message); resolve(); });
       req.write(body);
       req.end();
     });
@@ -1169,7 +1172,7 @@ module.exports = async (req, res) => {
       const dropOff = detectDropOffStep(updatedMessages);
 
       if (sessionId) {
-        logConversation(sessionId, updatedMessages, recommendation, reached, dropOff);
+        await logConversation(sessionId, updatedMessages, recommendation, reached, dropOff);
       }
 
       return res.json({ reply });
