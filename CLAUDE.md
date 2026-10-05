@@ -64,7 +64,7 @@ Saudi dialect strictly. No Egyptian or Levantine vocabulary. Prices VAT-inclusiv
 Block 0 — SECURITY GATE (in progress, Oct 2026). Hard prerequisite before installing any second store.
 State found 2026-10-04: RLS off on `stores`, `widget_settings`, `widget_stats`; `conversations` has RLS but "allow all" SELECT/INSERT policies for public; anon/authenticated hold full grants on all public tables. All Vercel vars except `SALLA_CLIENT_SECRET`/`SALLA_WEBHOOK_SECRET` were "encrypted", not Sensitive.
 Steps, each gated on Ahmed's approval:
-1. New Supabase secret key → `SUPABASE_KEY` in Vercel (Sensitive, production+preview) → redeploy → verify a turn lands in `conversations`. Creating/moving the key value is done by Ahmed in the browser (the agent's sandbox blocks secret-store writes).
+1. ✅ DONE 2026-10-05. New secret key `guider_server_2026_10` (prefix `sb_secret_pZNMU`) is `SUPABASE_KEY` in Vercel; production redeployed; verified by key hash in Supabase edge logs (3/3 test turns → 201). Still type "encrypted" with a development target — make Sensitive in step 6. Before this, production used a legacy JWT key. Test rows have session_id `block0-test-%`.
 2. Lock down: enable RLS on all public tables, drop the "allow all" policies on `conversations`, revoke anon/authenticated. Verify widget + logging + Supabase security advisor clean.
 3. Rotate Drip On's Salla OAuth token (stores was readable with the anon key).
 4. Before disabling old keys: search every repo file and every Vercel env var for usage of the legacy anon/service_role JWTs and the old `default` secret key; show Ahmed the result.
