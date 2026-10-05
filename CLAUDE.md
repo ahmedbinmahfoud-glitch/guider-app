@@ -63,14 +63,19 @@ Saudi dialect strictly. No Egyptian or Levantine vocabulary. Prices VAT-inclusiv
 
 Block 0 — SECURITY GATE (in progress, Oct 2026). Hard prerequisite before installing any second store.
 State found 2026-10-04: RLS off on `stores`, `widget_settings`, `widget_stats`; `conversations` has RLS but "allow all" SELECT/INSERT policies for public; anon/authenticated hold full grants on all public tables. All Vercel vars except `SALLA_CLIENT_SECRET`/`SALLA_WEBHOOK_SECRET` were "encrypted", not Sensitive.
-Steps, each gated on Ahmed's approval:
+Steps, each gated on Ahmed's approval (remaining: 3 = reinstall app on demo store, 6 = Sensitive vars):
 1. ✅ DONE 2026-10-05. New secret key `guider_server_2026_10` (prefix `sb_secret_pZNMU`) is `SUPABASE_KEY` in Vercel; production redeployed; verified by key hash in Supabase edge logs (3/3 test turns → 201). Still type "encrypted" with a development target — make Sensitive in step 6. Before this, production used a legacy JWT key. Test rows have session_id `block0-test-%`.
 2. ✅ DONE 2026-10-05. RLS on all 6 public tables, "allow all" policies on `conversations` dropped, all grants revoked from anon/authenticated (tables + sequences), default privileges in `public` revoked so new tables are private by default. Verified: anon key gets 401 on `stores`/`conversations`/`widget_settings`; production chat still logs; advisor shows only INFO "RLS enabled, no policy" (intended: server-only access via secret key). Test rows deleted. Note: Supabase MCP `apply_migration` timed out twice without applying; the Management API `database/query` endpoint worked.
 3. Revised 2026-10-05: there is NO Drip On Salla token anywhere. `stores` holds one row only — the demo store 399332406 (access token expired 2026-06-22; refresh token present). The 4 `salla_events` rows (labelled store_id 'dripon', hardcoded) are demo-store app install/uninstall events from June. Action: reinstall the app on the demo store to invalidate the exposed refresh token. `SALLA_ACCESS_TOKEN` is not referenced anywhere in code.
    Consequence for Block 2: Drip On does not have the app installed, so no order webhook can reach us from Drip On until the app is installed there (blocked on Salla app review, or another route to be confirmed).
 4. ✅ Search done 2026-10-05: no Supabase key in any file across all 67 commits; Vercel has one project and `SUPABASE_KEY` is the only Supabase key var (values can't be decrypted by the agent; production traffic proven on the new key via edge-log hash). Edge logs (24h window): legacy JWT used only by production before the switch and by the agent's anon-denial test; old `default` secret seen only on `/rest/v1/` root at 17:16–17:28 (dashboard probe pattern). Shown to Ahmed.
-5. Disable legacy JWT keys and delete the old `default` secret key (irreversible — closes the leaked key).
+5. ✅ DONE 2026-10-05. Legacy JWT API keys disabled (anon key now 401); old `default` secret key deleted. Only `guider_server_2026_10` (secret) and the `default` publishable key remain. Production verified after. Optional later hardening: migrate to asymmetric JWT signing keys and revoke the legacy JWT secret, so the disabled keys can never be re-enabled.
 6. Mark remaining Vercel vars Sensitive. Add `SALLA_CLIENT_SECRET`/`SALLA_WEBHOOK_SECRET` to preview so OAuth/webhooks are testable on previews.
+
+Salla install route (decided 2026-10-05): convert the Salla app to a PRIVATE app (installed on chosen stores via private link, lighter review than public listing) with App Snippet + webhooks. Ahmed has not yet submitted the app for any review. Verify in the portal: one private app on two stores, and whether the existing app's type can change or a new app is needed. While review is pending: widget thank-you-page beacon (order number ↔ session) as interim attribution; it stays as the permanent join key, the order webhook becomes the source of truth for amount/status/refunds.
+
+Launch framing (agreed 2026-10-05): no "100% of all possible features". Launch gate = Blocks 0–4 working on both stores + measured uplift. Blocks 5–6 after launch.
+Public launch gate: 4 weeks stable on both stores; attribution reconciles with Salla reports; Nalo 80/20 holdout shows conversion uplift; cost per conversation known and covered by pricing; dialect-violation rate under an agreed threshold. Also required before public launch (not yet in any block): self-serve merchant onboarding/config, billing via Salla app subscriptions, per-store cost caps, error alerting, PDPL compliance for stored conversations and purchase history.
 
 Agreed sequencing (confirmed by Ahmed, 2026-10-04). Nalo is the forcing function for the foundation:
 1. Block 0.
@@ -78,7 +83,8 @@ Agreed sequencing (confirmed by Ahmed, 2026-10-04). Nalo is the forcing function
 3. Block 1 for both stores: Supabase catalog sync (Salla webhooks + 15-min cron), `search_products` with structured filters (brand, gender, scent family, concentration, price), `check_inventory`, product links, `enforceSaudi()`. Vector RAG deferred until filters prove insufficient. Comes before the prompt split because the tools must replace the hardcoded catalog first.
 4. Multi-tenant refactor: one generic prompt + per-store config (persona, policies, shipping) + product rules in `metadata`. Validate against the regression set.
 5. Upgrade Vercel to Pro (Hobby is non-commercial and limits cron) — prerequisite before installing Nalo.
-6. Install on Nalo via the official app (OAuth + App Snippet), not the Advanced Customization JS field.
+6. Install on Nalo via the private app (OAuth + App Snippet), not the Advanced Customization JS field. Launch with an 80/20 holdout, 2 weeks measurement, then full rollout.
+Drip On: install the private app, and remove the Advanced Customization JS at the same moment (otherwise the widget loads twice).
 Parallel track (Ahmed's team, not code, start now — likely the critical path): enrich Nalo catalog data — top/middle/base notes, scent family, occasion, season, longevity; fix EDT/EDP labeling; fill missing barcodes. Without this the bot will invent notes.
 
 Then, for both stores:
