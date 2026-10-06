@@ -177,7 +177,7 @@ function injectProductLinks(text) {
 // Pre-filled WhatsApp link for qualified wholesale leads
 function buildWholesaleLink(details) {
   const msg = 'طلب جملة | ' + (details || 'من مساعد Guider');
-  return 'https://wa.me/966549111266?text=' + encodeURIComponent(msg);
+  return 'https://wa.me/966544141466?text=' + encodeURIComponent(msg);
 }
 
 // ---------- Security ----------
@@ -493,6 +493,7 @@ async function handleStoreAuthorize(payload) {
   if (!r.ok) console.error('Store save failed:', r.status);
   else console.log('Store authorized:', storeId, storeName);
   storeOriginCache.at = 0;
+  if (r.ok) await syncStoreProducts(storeId);
 }
 
 // Salla access tokens live 14 days. Vercel cron calls this daily; any token
@@ -541,6 +542,106 @@ async function refreshExpiringTokens() {
     else { failed++; console.error('Token save failed after refresh:', store.salla_store_id, u.status); }
   }
   return { checked: r.data.length, refreshed, skipped, failed };
+}
+
+// ---------- Catalog sync (Block 1) ----------
+// Products are cached per store so the bot reads live prices and stock
+// instead of the hardcoded prompt. Full sync on install and daily; product
+// webhooks keep rows fresh in between. `metadata` (our enrichment) is never
+// written by sync, so a resync can't wipe it.
+function amount(v) {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'object') return amount(v.amount);
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function mapProduct(storeId, p) {
+  const price = p.price || {};
+  const unlimited = p.unlimited_quantity === true;
+  return {
+    store_id: storeId,
+    salla_product_id: String(p.id),
+    name: p.name || null,
+    sku: p.sku || null,
+    type: p.type || null,
+    status: p.status || null,
+    is_available: typeof p.is_available === 'boolean' ? p.is_available : (p.status ? p.status === 'sale' : null),
+    quantity: unlimited ? null : (Number.isInteger(p.quantity) ? p.quantity : null),
+    price: amount(p.price),
+    regular_price: amount(p.regular_price),
+    sale_price: amount(p.sale_price),
+    currency: price.currency || (p.regular_price && p.regular_price.currency) || null,
+    url: p.url || (p.urls && (p.urls.customer || p.urls.store)) || null,
+    image: (p.main_image && (p.main_image.url || p.main_image)) || p.thumbnail || null,
+    brand: (p.brand && p.brand.name) || null,
+    categories: Array.isArray(p.categories) ? p.categories.map(c => ({ id: c.id, name: c.name })) : [],
+    options: Array.isArray(p.options) ? p.options.map(o => ({
+      name: o.name, values: Array.isArray(o.values) ? o.values.map(v => ({ id: v.id, name: v.name, price: amount(v.price) })) : []
+    })) : [],
+    description: typeof p.description === 'string' ? p.description.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 4000) : null,
+    raw: p,
+    synced_at: new Date().toISOString(),
+    removed_at: null
+  };
+}
+
+async function upsertProducts(rows) {
+  if (!rows.length) return true;
+  const r = await sb('POST', '/products?on_conflict=store_id,salla_product_id', rows, 'resolution=merge-duplicates,return=minimal');
+  if (!r.ok) console.error('products upsert failed:', r.status, JSON.stringify(r.data).slice(0, 200));
+  return r.ok;
+}
+
+async function storeToken(storeId) {
+  const r = await sb('GET', `/stores?select=access_token&is_active=eq.true&salla_store_id=eq.${encodeURIComponent(storeId)}`);
+  return r.ok && Array.isArray(r.data) && r.data[0] ? r.data[0].access_token : null;
+}
+
+// Pages through /products (max 60 per page). Products not seen in a complete
+// run are marked removed, never deleted.
+async function syncStoreProducts(storeId) {
+  const token = await storeToken(storeId);
+  if (!token) return { storeId, ok: false, reason: 'no token' };
+  const started = new Date().toISOString();
+  let page = 1, totalPages = 1, count = 0;
+  while (page <= totalPages && page <= 300) {
+    const res = await httpsGet('api.salla.dev', `/admin/v2/products?page=${page}&per_page=60`, {
+      'Authorization': `Bearer ${token}`, 'Accept': 'application/json', 'Accept-Language': 'ar'
+    }).catch(err => ({ error: err.message }));
+    if (!res || !Array.isArray(res.data)) {
+      console.error('Product sync page failed:', storeId, page, (res && (res.error && (res.error.message || res.error))) || res && res.status);
+      return { storeId, ok: false, count, reason: 'page ' + page };
+    }
+    if (!await upsertProducts(res.data.map(p => mapProduct(storeId, p)))) return { storeId, ok: false, count, reason: 'upsert' };
+    count += res.data.length;
+    totalPages = (res.pagination && res.pagination.totalPages) || 1;
+    page++;
+  }
+  await sb('PATCH', `/products?store_id=eq.${encodeURIComponent(storeId)}&synced_at=lt.${encodeURIComponent(started)}&removed_at=is.null`,
+    { removed_at: new Date().toISOString() });
+  console.log('Product sync done:', storeId, count);
+  return { storeId, ok: true, count };
+}
+
+async function syncAllStores() {
+  const r = await sb('GET', '/stores?select=salla_store_id&is_active=eq.true&access_token=not.is.null');
+  if (!r.ok || !Array.isArray(r.data)) return [];
+  const out = [];
+  for (const s of r.data) out.push(await syncStoreProducts(s.salla_store_id));
+  return out;
+}
+
+// product.* webhooks carry the product in `data`.
+async function handleProductEvent(storeId, eventType, payload) {
+  const p = payload && payload.data;
+  if (!p || !p.id) return;
+  if (eventType === 'product.deleted') {
+    await sb('PATCH', `/products?store_id=eq.${encodeURIComponent(storeId)}&salla_product_id=eq.${encodeURIComponent(String(p.id))}`,
+      { removed_at: new Date().toISOString() });
+    return;
+  }
+  await upsertProducts([mapProduct(storeId, p)]);
 }
 
 async function handleAppUninstalled(payload) {
@@ -630,7 +731,8 @@ const SYSTEM_PROMPT = `أنت "أحمد" — مستشار قهوة من فريق
 النظام يحوّله لرابط تلقائياً بعد ردك.
 
 الروابط الوحيدة المسموح لك كتابتها:
-- ✅ [💬 تواصل على واتساب](https://wa.me/966549111266)
+- ✅ [💬 تواصل على واتساب](https://wa.me/966549111266) — خدمة العملاء
+- ✅ [💬 تواصل مع فريق الجملة](https://wa.me/966544141466) — لطلبات الجملة المؤهلة فقط
 - ✅ [📧 info@driponcoffeesa.com](mailto:info@driponcoffeesa.com)
 
 ═══════════════════════════════════
@@ -934,7 +1036,7 @@ D10 يعطي ١٠٪ خصم على السلة، **ولا يشمل المنتجا�
 
 **بعد ما يجاوب:**
 "تمام، سجّلت التفاصيل. اضغط تحت ويوصلك فريق الجملة ومعهم بياناتك — ما راح تعيد شي.
-[💬 تواصل مع فريق الجملة](https://wa.me/966549111266)"
+[💬 تواصل مع فريق الجملة](https://wa.me/966544141466)"
 
 **مقهى واحد يعادل عشرات طلبات التجزئة.**
 
@@ -1293,6 +1395,7 @@ module.exports = async (req, res) => {
       if (eventType === 'app.store.authorize') await handleStoreAuthorize(payload);
       else if (eventType === 'app.uninstalled') { await handleAppUninstalled(payload); await logSallaEvent(merchant, eventType, payload); }
       else if (eventType.startsWith('order.')) await logSallaOrder(merchant, eventType, payload);
+      else if (eventType.startsWith('product.')) { await handleProductEvent(merchant, eventType, payload); await logSallaEvent(merchant, eventType, payload); }
       else await logSallaEvent(merchant, eventType, payload);
       return res.status(200).json({ received: true, event: eventType });
     } catch (err) {
@@ -1303,7 +1406,9 @@ module.exports = async (req, res) => {
 
   if (urlPath === '/api/cron/refresh-tokens' && req.method === 'GET') {
     const result = await refreshExpiringTokens();
-    return res.status(result.failed ? 500 : 200).json(result);
+    result.sync = await syncAllStores();
+    const syncFailed = result.sync.some(x => !x.ok);
+    return res.status(result.failed || syncFailed ? 500 : 200).json(result);
   }
 
   // The widget reports which Salla customer is browsing, on every page
