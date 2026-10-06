@@ -32,7 +32,9 @@ An Arabic AI shopping assistant (Claude API) deployed as a widget on Salla store
 - Supabase project `cjwrmrpacgqaekvddqvk`. Tables: `stores` (per-store OAuth tokens), `conversations` (one row per turn, not per conversation: ~6.9K rows = ~2K sessions since 2026-04-14), `orders` (empty), `salla_events`, `widget_settings`, `widget_stats`.
 - Repo: ahmedbinmahfoud-glitch/guider-app — main file `api/index.js`.
 - Salla App OAuth works end-to-end (demo store 399332406).
-- Drip On widget is currently injected via Salla Advanced Customization JS (fragile); official App Snippet route pending Salla app review.
+- Drip On widget is currently injected via Salla Advanced Customization JS (fragile); App Snippet route comes with the private app.
+- Salla apps: PUBLIC app 352516697 (OAuth Custom Mode, callback `/api/salla/callback`, webhook `/api/salla/order-webhook`, env `SALLA_CLIENT_ID/SECRET`, `SALLA_WEBHOOK_SECRET`) kept for the future public launch. PRIVATE app 1670010202 (created 2026-10-05; Easy Mode OAuth, tokens arrive in `app.store.authorize`; webhook `/api/salla/webhook`; env `SALLA_PRIVATE_CLIENT_ID/SECRET`, `SALLA_PRIVATE_WEBHOOK_SECRET`) is what Drip On and Nalo install. App type can't be changed after creation. Private app scopes, all read-only: customers, orders, carts, categories, brands, products, shipping, metadata, special offers, reviews.
+- Webhook security must be Token, not Signature: Vercel's Node runtime parses the body before the handler, so the raw bytes needed for HMAC are gone.
 
 ## Principles (non-negotiable)
 
@@ -53,7 +55,7 @@ Saudi dialect strictly. No Egyptian or Levantine vocabulary. Prices VAT-inclusiv
 ## Known architecture problems
 
 - System prompt v7 (~1,565 lines, ~13K tokens) hardcodes catalog, prices, inventory. Must go.
-- `attributeToSession` is a stub returning null — conversions not measured.
+- Attribution (Block 2 PR): the widget reports the logged-in Salla customer id per session to `/api/identify` (`session_identities` table); order webhooks join on store + customer within 7 days to a session that had a conversation. Salla checkout requires login, so the thank-you page always carries the customer id. Needs live verification that `salla.config.get('user.id')` is populated on the storefront.
 - `logConversation` was fire-and-forget (not awaited, HTTP status ignored), so Vercel froze the function before the insert finished and turns were silently lost. Fixed in the Block 0 PR (awaited + non-2xx logged).
 - `enforceSaudi()` not built yet.
 - Product rules (milk suitability, grind, cross-sell, intent triggers) live in the prompt; must move to per-product `metadata` JSONB so one prompt serves all merchants.
@@ -61,16 +63,16 @@ Saudi dialect strictly. No Egyptian or Levantine vocabulary. Prices VAT-inclusiv
 
 ## Roadmap (strict order)
 
-Block 0 — SECURITY GATE (in progress, Oct 2026). Hard prerequisite before installing any second store.
+Block 0 — SECURITY GATE. ✅ DONE 2026-10-06 except step 3 (demo-store reinstall, folded into the private-app test install).
 State found 2026-10-04: RLS off on `stores`, `widget_settings`, `widget_stats`; `conversations` has RLS but "allow all" SELECT/INSERT policies for public; anon/authenticated hold full grants on all public tables. All Vercel vars except `SALLA_CLIENT_SECRET`/`SALLA_WEBHOOK_SECRET` were "encrypted", not Sensitive.
-Steps, each gated on Ahmed's approval (remaining: 3 = reinstall app on demo store, 6 = Sensitive vars):
+Steps, each gated on Ahmed's approval:
 1. ✅ DONE 2026-10-05. New secret key `guider_server_2026_10` (prefix `sb_secret_pZNMU`) is `SUPABASE_KEY` in Vercel; production redeployed; verified by key hash in Supabase edge logs (3/3 test turns → 201). Still type "encrypted" with a development target — make Sensitive in step 6. Before this, production used a legacy JWT key. Test rows have session_id `block0-test-%`.
 2. ✅ DONE 2026-10-05. RLS on all 6 public tables, "allow all" policies on `conversations` dropped, all grants revoked from anon/authenticated (tables + sequences), default privileges in `public` revoked so new tables are private by default. Verified: anon key gets 401 on `stores`/`conversations`/`widget_settings`; production chat still logs; advisor shows only INFO "RLS enabled, no policy" (intended: server-only access via secret key). Test rows deleted. Note: Supabase MCP `apply_migration` timed out twice without applying; the Management API `database/query` endpoint worked.
 3. Revised 2026-10-05: there is NO Drip On Salla token anywhere. `stores` holds one row only — the demo store 399332406 (access token expired 2026-06-22; refresh token present). The 4 `salla_events` rows (labelled store_id 'dripon', hardcoded) are demo-store app install/uninstall events from June. Action: reinstall the app on the demo store to invalidate the exposed refresh token. `SALLA_ACCESS_TOKEN` is not referenced anywhere in code.
    Consequence for Block 2: Drip On does not have the app installed, so no order webhook can reach us from Drip On until the app is installed there (blocked on Salla app review, or another route to be confirmed).
 4. ✅ Search done 2026-10-05: no Supabase key in any file across all 67 commits; Vercel has one project and `SUPABASE_KEY` is the only Supabase key var (values can't be decrypted by the agent; production traffic proven on the new key via edge-log hash). Edge logs (24h window): legacy JWT used only by production before the switch and by the agent's anon-denial test; old `default` secret seen only on `/rest/v1/` root at 17:16–17:28 (dashboard probe pattern). Shown to Ahmed.
 5. ✅ DONE 2026-10-05. Legacy JWT API keys disabled (anon key now 401); old `default` secret key deleted. Only `guider_server_2026_10` (secret) and the `default` publishable key remain. Production verified after. Optional later hardening: migrate to asymmetric JWT signing keys and revoke the legacy JWT secret, so the disabled keys can never be re-enabled.
-6. Mark remaining Vercel vars Sensitive. Add `SALLA_CLIENT_SECRET`/`SALLA_WEBHOOK_SECRET` to preview so OAuth/webhooks are testable on previews.
+6. ✅ DONE 2026-10-06 by the agent via the Vercel API (type change + targets work without touching values): every secret var is Sensitive on production+preview. `SUPABASE_URL` stays a plain config var.
 
 Salla install route (decided 2026-10-05): convert the Salla app to a PRIVATE app (installed on chosen stores via private link, lighter review than public listing) with App Snippet + webhooks. Ahmed has not yet submitted the app for any review. Verify in the portal: one private app on two stores, and whether the existing app's type can change or a new app is needed. While review is pending: widget thank-you-page beacon (order number ↔ session) as interim attribution; it stays as the permanent join key, the order webhook becomes the source of truth for amount/status/refunds.
 

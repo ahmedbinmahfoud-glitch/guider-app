@@ -1,11 +1,43 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const https = require('https');
+const crypto = require('crypto');
 const querystring = require('querystring');
 const fs = require('fs');
 const path = require('path');
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
+
+// Minimal PostgREST client. Returns { ok, status, data } and never throws.
+function sb(method, pathAndQuery, body, prefer) {
+  return new Promise((resolve) => {
+    if (!SUPABASE_URL || !SUPABASE_KEY) return resolve({ ok: false, status: 0, data: null });
+    const url = new URL(`${SUPABASE_URL}/rest/v1${pathAndQuery}`);
+    const payload = body === undefined ? null : JSON.stringify(body);
+    const headers = {
+      'apikey': SUPABASE_KEY,
+      'Authorization': `Bearer ${SUPABASE_KEY}`,
+      'Accept': 'application/json'
+    };
+    if (payload !== null) {
+      headers['Content-Type'] = 'application/json';
+      headers['Content-Length'] = Buffer.byteLength(payload);
+      headers['Prefer'] = prefer || 'return=minimal';
+    }
+    const req = https.request({ hostname: url.hostname, port: url.port || 443, path: url.pathname + url.search, method, headers }, (res) => {
+      let raw = '';
+      res.on('data', chunk => raw += chunk);
+      res.on('end', () => {
+        let data = raw;
+        try { data = raw ? JSON.parse(raw) : null; } catch {}
+        resolve({ ok: res.statusCode < 300, status: res.statusCode, data });
+      });
+    });
+    req.on('error', (err) => resolve({ ok: false, status: 0, data: err.message }));
+    if (payload !== null) req.write(payload);
+    req.end();
+  });
+}
 
 // ============================================
 // PROMOTIONS — single source of truth for every active discount.
@@ -149,19 +181,49 @@ function buildWholesaleLink(details) {
 }
 
 // ---------- Security ----------
-const ALLOWED_ORIGINS = [
-  'https://driponcoffeesa.com',
-  'https://www.driponcoffeesa.com'
-];
+// Drip On runs on the Advanced Customization JS before the private app is
+// installed there, so its origins stay hardcoded and map to 'dripon'.
+const STATIC_ORIGINS = {
+  'https://driponcoffeesa.com': 'dripon',
+  'https://www.driponcoffeesa.com': 'dripon'
+};
 
-function applyCors(req, res) {
+// Origins of stores that installed the app, refreshed every 5 minutes.
+let storeOriginCache = { at: 0, map: {} };
+async function getStoreOrigins() {
+  if (Date.now() - storeOriginCache.at < 5 * 60 * 1000) return storeOriginCache.map;
+  const map = {};
+  const r = await sb('GET', '/stores?select=salla_store_id,store_domain&is_active=eq.true');
+  if (r.ok && Array.isArray(r.data)) {
+    for (const row of r.data) {
+      if (!row.store_domain) continue;
+      try {
+        const u = new URL(row.store_domain);
+        const host = u.hostname.replace(/^www\./, '');
+        map[`https://${host}`] = row.salla_store_id;
+        map[`https://www.${host}`] = row.salla_store_id;
+      } catch {}
+    }
+    storeOriginCache = { at: Date.now(), map };
+  }
+  return storeOriginCache.map;
+}
+
+// Returns the store id for an allowed origin, or null.
+async function resolveStore(origin) {
+  if (!origin) return null;
+  const installed = await getStoreOrigins();
+  return installed[origin] || STATIC_ORIGINS[origin] || null;
+}
+
+async function applyCors(req, res) {
   const origin = req.headers.origin || '';
-  const ok = ALLOWED_ORIGINS.includes(origin);
-  if (ok) res.setHeader('Access-Control-Allow-Origin', origin);
+  const storeId = await resolveStore(origin);
+  if (storeId) res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  return ok;
+  return storeId;
 }
 
 const RATE = new Map();
@@ -211,11 +273,11 @@ function detectDropOffStep(messages) {
   return 'after_welcome';
 }
 
-async function logConversation(sessionId, messages, recommendation, reachedRecommendation, dropOffStep) {
+async function logConversation(storeId, sessionId, messages, recommendation, reachedRecommendation, dropOffStep) {
   try {
     const body = JSON.stringify({
       session_id: sessionId,
-      store_id: 'dripon',
+      store_id: storeId,
       messages: messages,
       recommendation: recommendation || null,
       reached_recommendation: reachedRecommendation || false,
@@ -224,6 +286,7 @@ async function logConversation(sessionId, messages, recommendation, reachedRecom
     const url = new URL(`${SUPABASE_URL}/rest/v1/conversations`);
     const options = {
       hostname: url.hostname,
+      port: url.port || 443,
       path: url.pathname,
       method: 'POST',
       headers: {
@@ -252,16 +315,24 @@ async function logConversation(sessionId, messages, recommendation, reachedRecom
   }
 }
 
+// Two Salla apps post here: the public app (SALLA_WEBHOOK_SECRET) and the
+// private app (SALLA_PRIVATE_WEBHOOK_SECRET). Both use the Token strategy.
+// Signature (HMAC of the raw body) can't be verified on Vercel's Node runtime:
+// the body is parsed before the handler runs and the raw bytes are gone.
 function verifySallaWebhook(req) {
-  const expectedSecret = process.env.SALLA_WEBHOOK_SECRET;
-  if (!expectedSecret) {
-    console.error('SALLA_WEBHOOK_SECRET not configured');
+  const secrets = [process.env.SALLA_WEBHOOK_SECRET, process.env.SALLA_PRIVATE_WEBHOOK_SECRET].filter(Boolean);
+  if (!secrets.length) {
+    console.error('No Salla webhook secret configured');
     return false;
   }
-  const authHeader = req.headers['authorization'] || req.headers['Authorization'] || '';
+  const authHeader = req.headers['authorization'] || '';
   const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-  const sallaSignature = req.headers['x-salla-signature'] || '';
-  return token === expectedSecret || sallaSignature === expectedSecret;
+  if (!token) return false;
+  const given = Buffer.from(token);
+  return secrets.some(secret => {
+    const expected = Buffer.from(secret);
+    return given.length === expected.length && crypto.timingSafeEqual(given, expected);
+  });
 }
 
 function extractOrderData(payload) {
@@ -290,19 +361,36 @@ function extractOrderData(payload) {
   };
 }
 
-async function attributeToSession(orderData) {
-  if (!SUPABASE_URL || !SUPABASE_KEY) {
-    return { session_id: null, method: 'unknown', confidence: 'none' };
+// Links an order to the widget session that preceded it. Salla requires
+// login (phone OTP) at checkout, so the widget reports the Salla customer id
+// on every page, including the thank-you page. A session counts if that
+// customer was seen in it within the 7 days before the order and it had a
+// conversation with the bot.
+const ATTRIBUTION_WINDOW_DAYS = 7;
+async function attributeToSession(orderData, storeId) {
+  const none = { session_id: null, method: 'none', confidence: 'none' };
+  if (!orderData.customer_id) return none;
+  const since = new Date(Date.now() - ATTRIBUTION_WINDOW_DAYS * 86400000).toISOString();
+  const ids = await sb('GET', `/session_identities?select=session_id,last_seen` +
+    `&store_id=eq.${encodeURIComponent(storeId)}` +
+    `&customer_id=eq.${encodeURIComponent(orderData.customer_id)}` +
+    `&last_seen=gte.${encodeURIComponent(since)}&order=last_seen.desc&limit=5`);
+  if (!ids.ok || !Array.isArray(ids.data)) return none;
+  for (const row of ids.data) {
+    const conv = await sb('GET', `/conversations?select=id&session_id=eq.${encodeURIComponent(row.session_id)}&limit=1`);
+    if (conv.ok && Array.isArray(conv.data) && conv.data.length) {
+      return { session_id: row.session_id, method: 'customer_id', confidence: 'high' };
+    }
   }
-  return { session_id: null, method: 'unknown', confidence: 'none' };
+  return none;
 }
 
-async function logSallaOrder(eventType, payload) {
+async function logSallaOrder(storeId, eventType, payload) {
   try {
     const orderData = extractOrderData(payload);
-    const attribution = await attributeToSession(orderData);
-    const body = JSON.stringify({
-      store_id: 'dripon',
+    const attribution = await attributeToSession(orderData, storeId);
+    const r = await sb('POST', '/orders', {
+      store_id: storeId,
       event_type: eventType,
       event_timestamp: new Date().toISOString(),
       salla_order_id: orderData.salla_order_id,
@@ -325,68 +413,77 @@ async function logSallaOrder(eventType, payload) {
       attribution_confidence: attribution.confidence,
       raw_payload: payload
     });
-    const url = new URL(`${SUPABASE_URL}/rest/v1/orders`);
-    return new Promise((resolve) => {
-      const req = https.request({
-        hostname: url.hostname,
-        path: url.pathname,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'apikey': SUPABASE_KEY,
-          'Authorization': `Bearer ${SUPABASE_KEY}`,
-          'Prefer': 'return=minimal',
-          'Content-Length': Buffer.byteLength(body)
-        }
-      }, (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => {
-          if (res.statusCode >= 400) console.error('Supabase orders insert failed:', res.statusCode, data);
-          resolve();
-        });
-      });
-      req.on('error', (err) => { console.error('Order log error:', err.message); resolve(); });
-      req.write(body);
-      req.end();
-    });
+    if (!r.ok) console.error('Supabase orders insert failed:', r.status, JSON.stringify(r.data).slice(0, 200));
   } catch (err) {
     console.error('logSallaOrder failed:', err.message);
   }
 }
 
-async function logSallaEvent(eventType, payload) {
-  try {
-    const body = JSON.stringify({
-      store_id: 'dripon',
-      event_type: eventType,
-      raw_payload: payload,
-      processed: false
-    });
-    const url = new URL(`${SUPABASE_URL}/rest/v1/salla_events`);
-    return new Promise((resolve) => {
-      const req = https.request({
-        hostname: url.hostname,
-        path: url.pathname,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'apikey': SUPABASE_KEY,
-          'Authorization': `Bearer ${SUPABASE_KEY}`,
-          'Prefer': 'return=minimal',
-          'Content-Length': Buffer.byteLength(body)
-        }
-      }, (res) => {
-        res.on('data', () => {});
-        res.on('end', () => resolve());
-      });
-      req.on('error', () => resolve());
-      req.write(body);
-      req.end();
-    });
-  } catch (err) {
-    console.error('logSallaEvent failed:', err.message);
+// Non-order events keep only the event name and the entity id. Product and
+// customer payloads carry personal data we don't need to store; catalog sync
+// (Block 1) refetches from the Salla API instead.
+async function logSallaEvent(storeId, eventType, payload) {
+  const data = (payload && payload.data) || {};
+  const r = await sb('POST', '/salla_events', {
+    store_id: storeId,
+    event_type: eventType,
+    raw_payload: { event: eventType, merchant: payload && payload.merchant, entity_id: data.id || null },
+    processed: false
+  });
+  if (!r.ok) console.error('salla_events insert failed:', r.status);
+}
+
+// Easy Mode OAuth (private app): Salla posts the tokens in app.store.authorize.
+// They go to `stores` only and are never logged.
+async function handleStoreAuthorize(payload) {
+  const storeId = String(payload.merchant || '');
+  const data = payload.data || {};
+  if (!storeId || !data.access_token) {
+    console.error('app.store.authorize missing merchant or token');
+    return;
   }
+  let storeName = null, storeDomain = null, plan = null;
+  try {
+    const info = await httpsGet('api.salla.dev', '/admin/v2/store/info', {
+      'Authorization': `Bearer ${data.access_token}`,
+      'Accept': 'application/json'
+    });
+    if (info && info.data) {
+      storeName = info.data.name || null;
+      storeDomain = info.data.domain || null;
+      plan = info.data.plan || null;
+    }
+  } catch (err) {
+    console.error('Store info fetch failed:', err.message);
+  }
+  const expiresAt = data.expires ? new Date(Number(data.expires) * 1000).toISOString() : null;
+  const r = await sb('POST', '/stores?on_conflict=salla_store_id', {
+    salla_store_id: storeId,
+    store_name: storeName,
+    store_domain: storeDomain,
+    access_token: data.access_token,
+    refresh_token: data.refresh_token || null,
+    expires_at: expiresAt,
+    scope: data.scope || null,
+    is_active: true,
+    plan,
+    salla_app: 'private',
+    installed_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  }, 'resolution=merge-duplicates,return=minimal');
+  if (!r.ok) console.error('Store save failed:', r.status);
+  else console.log('Store authorized:', storeId, storeName);
+  storeOriginCache.at = 0;
+}
+
+async function handleAppUninstalled(payload) {
+  const storeId = String(payload.merchant || '');
+  if (!storeId) return;
+  const r = await sb('PATCH', `/stores?salla_store_id=eq.${encodeURIComponent(storeId)}`, {
+    is_active: false, access_token: null, refresh_token: null, updated_at: new Date().toISOString()
+  });
+  if (!r.ok) console.error('Store deactivate failed:', r.status);
+  storeOriginCache.at = 0;
 }
 
 function httpsGet(hostname, pathStr, headers) {
@@ -989,7 +1086,7 @@ CHOICES: [فاكهي 🌸] [كلاسيكي 🍂] [ما أعرف]
 - اقتراح واحد، ثم اسكت`;
 
 module.exports = async (req, res) => {
-  const originOk = applyCors(req, res);
+  const storeId = await applyCors(req, res);
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
@@ -1112,7 +1209,8 @@ module.exports = async (req, res) => {
     }
   }
 
-  if (urlPath === '/api/salla/order-webhook' && req.method === 'POST') {
+  // /order-webhook is the public app's URL, /webhook the private app's.
+  if ((urlPath === '/api/salla/webhook' || urlPath === '/api/salla/order-webhook') && req.method === 'POST') {
     try {
       if (!verifySallaWebhook(req)) {
         console.warn('Invalid Salla webhook token');
@@ -1123,18 +1221,40 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: 'Invalid payload' });
       }
       const eventType = payload.event || 'unknown';
-      if (eventType.startsWith('order.')) await logSallaOrder(eventType, payload);
-      else await logSallaEvent(eventType, payload);
+      const merchant = String(payload.merchant || 'unknown');
+      if (eventType === 'app.store.authorize') await handleStoreAuthorize(payload);
+      else if (eventType === 'app.uninstalled') { await handleAppUninstalled(payload); await logSallaEvent(merchant, eventType, payload); }
+      else if (eventType.startsWith('order.')) await logSallaOrder(merchant, eventType, payload);
+      else await logSallaEvent(merchant, eventType, payload);
       return res.status(200).json({ received: true, event: eventType });
     } catch (err) {
-      console.error('Webhook handler error:', err);
-      return res.status(200).json({ received: true, error: err.message });
+      console.error('Webhook handler error:', err.message);
+      return res.status(200).json({ received: true });
     }
+  }
+
+  // The widget reports which Salla customer is browsing, on every page
+  // including checkout and thank-you. This is the join key for attribution.
+  if (urlPath === '/api/identify' && req.method === 'POST') {
+    if (!storeId) return res.status(403).json({ error: 'Forbidden origin' });
+    const { sessionId, customerId } = req.body || {};
+    const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    if (typeof sessionId !== 'string' || !/^session_[\w]{6,60}$/.test(sessionId) ||
+        !/^\d{1,20}$/.test(String(customerId || ''))) {
+      return res.status(400).json({ error: 'invalid' });
+    }
+    if (rateLimited(null, ip)) return res.status(429).json({ error: 'rate limited' });
+    const r = await sb('POST', '/session_identities?on_conflict=store_id,session_id,customer_id', {
+      store_id: storeId, session_id: sessionId, customer_id: String(customerId),
+      last_seen: new Date().toISOString()
+    }, 'resolution=merge-duplicates,return=minimal');
+    if (!r.ok) console.error('identify insert failed:', r.status);
+    return res.status(204).end();
   }
 
   if (urlPath === '/api/index' && req.method === 'POST') {
     try {
-      if (!originOk) return res.status(403).json({ error: 'Forbidden origin' });
+      if (!storeId) return res.status(403).json({ error: 'Forbidden origin' });
 
       const { messages, sessionId } = req.body;
       if (!messages || !Array.isArray(messages)) {
@@ -1172,7 +1292,7 @@ module.exports = async (req, res) => {
       const dropOff = detectDropOffStep(updatedMessages);
 
       if (sessionId) {
-        await logConversation(sessionId, updatedMessages, recommendation, reached, dropOff);
+        await logConversation(storeId, sessionId, updatedMessages, recommendation, reached, dropOff);
       }
 
       return res.json({ reply });
