@@ -102,6 +102,9 @@ Agreed sequencing (confirmed by Ahmed, 2026-10-04). Nalo is the forcing function
 Drip On: install the private app, and remove the Advanced Customization JS at the same moment (otherwise the widget loads twice).
 Parallel track (Ahmed's team, not code, start now — likely the critical path): enrich Nalo catalog data — top/middle/base notes, scent family, occasion, season, longevity; fix EDT/EDP labeling; fill missing barcodes. Without this the bot will invent notes.
 
+Block 1 status (2026-10-07): phase 1 = `products` + `store_config` tables, catalog sync (full on install via `app.store.authorize`, daily in the cron, live via `product.*` webhooks; removed products get `removed_at`, `metadata` is never overwritten by sync). Next phases: Drip On product metadata (taste profile, recipe) extracted from prompt v7 for Ahmed's review; store_config rules from `docs/merchants/dripon-rules.md`; bot tools (search_products, check_inventory, links); `enforceSaudi()`. The prompt stays untouched until the regression set shows parity. Known limits: sync runs inside the authorize webhook (fine at Drip On/demo size; Nalo's first sync should move to a background step); `raw` payload per product is kept for parser fixes (watch DB size at 15K SKUs).
+Integration tests: `bash tests/integration/run.sh` (fake Supabase/Salla/Claude, no secrets).
+
 Then, for both stores:
 Block 3 — MEMORY: `customers` table + `get_customer_orders` + purchase-history injection.
 Block 4 — CLOSE: `add_to_cart`.
