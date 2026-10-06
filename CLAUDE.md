@@ -35,6 +35,14 @@ An Arabic AI shopping assistant (Claude API) deployed as a widget on Salla store
 - Drip On widget is currently injected via Salla Advanced Customization JS (fragile); App Snippet route comes with the private app.
 - Salla apps: PUBLIC app 352516697 (OAuth Custom Mode, callback `/api/salla/callback`, webhook `/api/salla/order-webhook`, env `SALLA_CLIENT_ID/SECRET`, `SALLA_WEBHOOK_SECRET`) kept for the future public launch. PRIVATE app 1670010202 (created 2026-10-05; Easy Mode OAuth, tokens arrive in `app.store.authorize`; webhook `/api/salla/webhook`; env `SALLA_PRIVATE_CLIENT_ID/SECRET`, `SALLA_PRIVATE_WEBHOOK_SECRET`) is what Drip On and Nalo install. App type can't be changed after creation. Private app scopes, all read-only: customers, orders, carts, categories, brands, products, shipping, metadata, special offers, reviews.
 - Webhook security must be Token, not Signature: Vercel's Node runtime parses the body before the handler, so the raw bytes needed for HMAC are gone.
+- Private app status (2026-10-06): installed on the demo store 399332406 and verified end to end — `app.store.authorize` saved the token (`salla_app='private'`, expires 14 days after install), App Snippet loads the widget, a chat logged with `store_id='399332406'`. Not yet submitted for Salla review.
+- Salla gotchas learned the hard way:
+  - App Snippets must be pure JavaScript (no `<script>` tags); the loader snippet creates the `<script src=".../widget.js">` itself. Salla wraps snippets in `Salla.onReady` with a scoped `salla` and a proxied `document`.
+  - A snippet reaches a store only at install time. After adding or changing a snippet, reinstall the app on the store (check: the store page loads `cdn.portal.files.salla.network/snippets/<env>/1670010202/...js`).
+  - `salla.config.get('user.id')` is populated for guests too; only trust it when `salla.config.isGuest()` is false, and read config inside `salla.onReady`.
+  - Easy Mode access tokens expire after 14 days. A daily refresh job (refresh_token grant with the private app's client id/secret) is required before 2026-10-20 or the store's token dies — schedule it in Block 1.
+  - The webhook secret in Vercel must be re-copied after changing the security strategy; a mismatch shows as `Salla webhook rejected` with differing fingerprints in the runtime logs.
+- Agent's environment allowlist includes driponcoffeesa.com, demostore.salla.sa, cdn.portal.files.salla.network, cdn.salla.network (for storefront debugging). docs.salla.dev is blocked; Salla's partner agent kit (github.com/SallaApp/salla-partners-agent-kit, cloneable) documents snippets/webhooks.
 
 ## Principles (non-negotiable)
 
@@ -63,7 +71,7 @@ Saudi dialect strictly. No Egyptian or Levantine vocabulary. Prices VAT-inclusiv
 
 ## Roadmap (strict order)
 
-Block 0 — SECURITY GATE. ✅ DONE 2026-10-06 except step 3 (demo-store reinstall, folded into the private-app test install).
+Block 0 — SECURITY GATE. ✅ DONE 2026-10-06 (step 3 closed by the private-app reinstall on the demo store, which replaced the exposed June token).
 State found 2026-10-04: RLS off on `stores`, `widget_settings`, `widget_stats`; `conversations` has RLS but "allow all" SELECT/INSERT policies for public; anon/authenticated hold full grants on all public tables. All Vercel vars except `SALLA_CLIENT_SECRET`/`SALLA_WEBHOOK_SECRET` were "encrypted", not Sensitive.
 Steps, each gated on Ahmed's approval:
 1. ✅ DONE 2026-10-05. New secret key `guider_server_2026_10` (prefix `sb_secret_pZNMU`) is `SUPABASE_KEY` in Vercel; production redeployed; verified by key hash in Supabase edge logs (3/3 test turns → 201). Still type "encrypted" with a development target — make Sensitive in step 6. Before this, production used a legacy JWT key. Test rows have session_id `block0-test-%`.
