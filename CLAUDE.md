@@ -40,7 +40,8 @@ An Arabic AI shopping assistant (Claude API) deployed as a widget on Salla store
   - App Snippets must be pure JavaScript (no `<script>` tags); the loader snippet creates the `<script src=".../widget.js">` itself. Salla wraps snippets in `Salla.onReady` with a scoped `salla` and a proxied `document`.
   - A snippet reaches a store only at install time. After adding or changing a snippet, reinstall the app on the store (check: the store page loads `cdn.portal.files.salla.network/snippets/<env>/1670010202/...js`).
   - `salla.config.get('user.id')` is populated for guests too; only trust it when `salla.config.isGuest()` is false, and read config inside `salla.onReady`.
-  - Easy Mode access tokens expire after 14 days. A daily refresh job (refresh_token grant with the private app's client id/secret) is required before 2026-10-20 or the store's token dies — schedule it in Block 1.
+  - Easy Mode access tokens expire after 14 days. `/api/cron/refresh-tokens` (Vercel cron, daily 02:00 UTC) refreshes any token expiring within 3 days using the client credentials of the store's `salla_app`; a store refreshed in the last 12 h is skipped so extra calls can't burn the single-use refresh token. Returns 500 if any refresh fails.
+  - The agent's auto mode blocks scheduled jobs (cron) as a standing-rule change; Ahmed switched the session to "Accept edits" to add it.
   - The webhook secret in Vercel must be re-copied after changing the security strategy; a mismatch shows as `Salla webhook rejected` with differing fingerprints in the runtime logs.
 - Agent's environment allowlist includes driponcoffeesa.com, demostore.salla.sa, cdn.portal.files.salla.network, cdn.salla.network (for storefront debugging). docs.salla.dev is blocked; Salla's partner agent kit (github.com/SallaApp/salla-partners-agent-kit, cloneable) documents snippets/webhooks.
 
