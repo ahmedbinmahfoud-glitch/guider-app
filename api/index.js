@@ -320,7 +320,10 @@ async function logConversation(storeId, sessionId, messages, recommendation, rea
 // Signature (HMAC of the raw body) can't be verified on Vercel's Node runtime:
 // the body is parsed before the handler runs and the raw bytes are gone.
 function verifySallaWebhook(req) {
-  const secrets = [process.env.SALLA_WEBHOOK_SECRET, process.env.SALLA_PRIVATE_WEBHOOK_SECRET].filter(Boolean);
+  // Trimmed: a value pasted into Vercel with a trailing newline or space
+  // would otherwise never match.
+  const secrets = [process.env.SALLA_WEBHOOK_SECRET, process.env.SALLA_PRIVATE_WEBHOOK_SECRET]
+    .filter(Boolean).map(v => v.trim());
   if (!secrets.length) {
     console.error('No Salla webhook secret configured');
     return false;
@@ -337,9 +340,15 @@ function verifySallaWebhook(req) {
   }));
   if (!ok) {
     // Header names and the declared strategy only; never values.
+    // Lengths and an 8-hex-char SHA-256 prefix tell a whitespace or
+    // wrong-secret mismatch apart without revealing any value.
+    const fp = v => `${v.length}:${crypto.createHash('sha256').update(v).digest('hex').slice(0, 8)}`;
     console.warn('Salla webhook rejected', JSON.stringify({
       strategy: req.headers['x-salla-security-strategy'] || null,
-      headers: Object.keys(req.headers).filter(h => /salla|authorization/i.test(h))
+      headers: Object.keys(req.headers).filter(h => /salla|authorization/i.test(h)),
+      received: candidates.map(fp),
+      configured: secrets.map(fp),
+      authScheme: (req.headers['authorization'] || '').split(' ')[0] || null
     }));
   }
   return ok;
