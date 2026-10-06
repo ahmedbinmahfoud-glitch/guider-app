@@ -177,7 +177,7 @@ function injectProductLinks(text) {
 // Pre-filled WhatsApp link for qualified wholesale leads
 function buildWholesaleLink(details) {
   const msg = 'طلب جملة | ' + (details || 'من مساعد Guider');
-  return 'https://wa.me/966549111266?text=' + encodeURIComponent(msg);
+  return 'https://wa.me/966544141466?text=' + encodeURIComponent(msg);
 }
 
 // ---------- Security ----------
@@ -731,7 +731,8 @@ const SYSTEM_PROMPT = `أنت "أحمد" — مستشار قهوة من فريق
 النظام يحوّله لرابط تلقائياً بعد ردك.
 
 الروابط الوحيدة المسموح لك كتابتها:
-- ✅ [💬 تواصل على واتساب](https://wa.me/966549111266)
+- ✅ [💬 تواصل على واتساب](https://wa.me/966549111266) — خدمة العملاء
+- ✅ [💬 تواصل مع فريق الجملة](https://wa.me/966544141466) — لطلبات الجملة المؤهلة فقط
 - ✅ [📧 info@driponcoffeesa.com](mailto:info@driponcoffeesa.com)
 
 ═══════════════════════════════════
@@ -1035,7 +1036,7 @@ D10 يعطي ١٠٪ خصم على السلة، **ولا يشمل المنتجا�
 
 **بعد ما يجاوب:**
 "تمام، سجّلت التفاصيل. اضغط تحت ويوصلك فريق الجملة ومعهم بياناتك — ما راح تعيد شي.
-[💬 تواصل مع فريق الجملة](https://wa.me/966549111266)"
+[💬 تواصل مع فريق الجملة](https://wa.me/966544141466)"
 
 **مقهى واحد يعادل عشرات طلبات التجزئة.**
 
