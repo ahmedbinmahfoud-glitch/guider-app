@@ -1364,7 +1364,8 @@ module.exports = async (req, res) => {
       const { recommendation, reached } = detectRecommendation(updatedMessages);
       const dropOff = detectDropOffStep(updatedMessages);
 
-      if (sessionId) {
+      // Regression replays (scripts/regression.js) are never logged.
+      if (sessionId && !String(sessionId).startsWith('session_regress_')) {
         await logConversation(storeId, sessionId, updatedMessages, recommendation, reached, dropOff);
       }
 
