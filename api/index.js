@@ -495,6 +495,54 @@ async function handleStoreAuthorize(payload) {
   storeOriginCache.at = 0;
 }
 
+// Salla access tokens live 14 days. Vercel cron calls this daily; any token
+// expiring within 3 days is refreshed with the client credentials of the app
+// the store installed. Refresh tokens are single-use, so a store refreshed in
+// the last 12 hours is skipped: an extra call to this public URL can't race a
+// refresh in progress or burn a token.
+const REFRESH_WINDOW_MS = 3 * 86400000;
+const REFRESH_COOLDOWN_MS = 12 * 3600000;
+async function refreshExpiringTokens() {
+  const horizon = new Date(Date.now() + REFRESH_WINDOW_MS).toISOString();
+  const r = await sb('GET', `/stores?select=salla_store_id,salla_app,refresh_token,updated_at` +
+    `&is_active=eq.true&refresh_token=not.is.null&expires_at=lt.${encodeURIComponent(horizon)}`);
+  if (!r.ok || !Array.isArray(r.data)) return { checked: 0, refreshed: 0, skipped: 0, failed: 1 };
+  let refreshed = 0, failed = 0, skipped = 0;
+  for (const store of r.data) {
+    if (store.updated_at && Date.now() - new Date(store.updated_at).getTime() < REFRESH_COOLDOWN_MS) { skipped++; continue; }
+    const isPrivate = store.salla_app === 'private';
+    const form = querystring.stringify({
+      grant_type: 'refresh_token',
+      refresh_token: store.refresh_token,
+      client_id: isPrivate ? process.env.SALLA_PRIVATE_CLIENT_ID : process.env.SALLA_CLIENT_ID,
+      client_secret: isPrivate ? process.env.SALLA_PRIVATE_CLIENT_SECRET : process.env.SALLA_CLIENT_SECRET
+    });
+    let token = null;
+    try {
+      token = await httpsPost('accounts.salla.sa', '/oauth2/token', {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': Buffer.byteLength(form)
+      }, form);
+    } catch (err) {
+      console.error('Token refresh network error:', store.salla_store_id, err.message);
+    }
+    if (!token || !token.access_token) {
+      failed++;
+      console.error('Token refresh failed:', store.salla_store_id, (token && (token.error || token.message)) || 'no response');
+      continue;
+    }
+    const u = await sb('PATCH', `/stores?salla_store_id=eq.${encodeURIComponent(store.salla_store_id)}`, {
+      access_token: token.access_token,
+      refresh_token: token.refresh_token || store.refresh_token,
+      expires_at: token.expires_in ? new Date(Date.now() + token.expires_in * 1000).toISOString() : null,
+      updated_at: new Date().toISOString()
+    });
+    if (u.ok) { refreshed++; console.log('Token refreshed:', store.salla_store_id); }
+    else { failed++; console.error('Token save failed after refresh:', store.salla_store_id, u.status); }
+  }
+  return { checked: r.data.length, refreshed, skipped, failed };
+}
+
 async function handleAppUninstalled(payload) {
   const storeId = String(payload.merchant || '');
   if (!storeId) return;
@@ -1251,6 +1299,11 @@ module.exports = async (req, res) => {
       console.error('Webhook handler error:', err.message);
       return res.status(200).json({ received: true });
     }
+  }
+
+  if (urlPath === '/api/cron/refresh-tokens' && req.method === 'GET') {
+    const result = await refreshExpiringTokens();
+    return res.status(result.failed ? 500 : 200).json(result);
   }
 
   // The widget reports which Salla customer is browsing, on every page
