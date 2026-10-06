@@ -15,7 +15,7 @@ answer every time: the regression set checks consistency, not just correctness.
 ## Discount codes (decided 2026-10-06)
 - If a code is active, give it.
 - If no code is active, decline warmly, without promising future codes.
-- If the customer insists, hand off to customer service on WhatsApp.
+- If the customer insists, hand off to customer service on WhatsApp: +966 54 911 1266 (`https://wa.me/966549111266`, the same number already used for wholesale leads and shown in the store).
 - The bot never invents a code. Active codes come from the store config (later from Salla's coupons API, which needs the Marketing read scope the private app doesn't have yet).
 
 ## Price objections (from Ahmed's rating, 2026-10-06)
