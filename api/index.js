@@ -325,14 +325,24 @@ function verifySallaWebhook(req) {
     console.error('No Salla webhook secret configured');
     return false;
   }
-  const authHeader = req.headers['authorization'] || '';
-  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-  if (!token) return false;
-  const given = Buffer.from(token);
-  return secrets.some(secret => {
-    const expected = Buffer.from(secret);
+  // Salla's docs aren't explicit about where the Token strategy puts the
+  // token; the public app's events were accepted with either header before.
+  const candidates = [
+    (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim(),
+    String(req.headers['x-salla-signature'] || '').trim()
+  ].filter(Boolean);
+  const ok = candidates.some(token => secrets.some(secret => {
+    const given = Buffer.from(token), expected = Buffer.from(secret);
     return given.length === expected.length && crypto.timingSafeEqual(given, expected);
-  });
+  }));
+  if (!ok) {
+    // Header names and the declared strategy only; never values.
+    console.warn('Salla webhook rejected', JSON.stringify({
+      strategy: req.headers['x-salla-security-strategy'] || null,
+      headers: Object.keys(req.headers).filter(h => /salla|authorization/i.test(h))
+    }));
+  }
+  return ok;
 }
 
 function extractOrderData(payload) {
@@ -1222,6 +1232,7 @@ module.exports = async (req, res) => {
       }
       const eventType = payload.event || 'unknown';
       const merchant = String(payload.merchant || 'unknown');
+      console.log('Salla webhook', eventType, merchant);
       if (eventType === 'app.store.authorize') await handleStoreAuthorize(payload);
       else if (eventType === 'app.uninstalled') { await handleAppUninstalled(payload); await logSallaEvent(merchant, eventType, payload); }
       else if (eventType.startsWith('order.')) await logSallaOrder(merchant, eventType, payload);
