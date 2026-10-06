@@ -1,25 +1,64 @@
 // ============================================================
-// widget.js — ONLY CHANGE vs your current file: sessionId now
-// survives page navigation via sessionStorage (lines 3-8).
-// Everything else is byte-identical to what you're running.
+// widget.js — Guider storefront widget for Salla stores.
 // ============================================================
 (function() {
-  const API = 'https://guider-app.vercel.app';
+  // Talk to the deployment that served this file, so a preview build of the
+  // widget calls the preview API instead of production.
+  const API = (function() {
+    try {
+      const src = document.currentScript && document.currentScript.src;
+      // Only our own Vercel deployments; a CDN copy must still hit production.
+      if (src && /^guider-[\w-]+\.vercel\.app$/.test(new URL(src).hostname)) return new URL(src).origin;
+    } catch (e) {}
+    return 'https://guider-app.vercel.app';
+  })();
   let messages = [];
 
-  // Persist the session across page loads so one customer = one conversation.
-  // Was: a fresh id on every page load, which inflated conversation counts
-  // and made order attribution impossible.
+  // One visitor = one session for 30 days, across tabs and visits, so an
+  // order placed days after the chat can still be attributed to it.
+  const SESSION_KEY = 'guider_session';
+  const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+  function newSessionId() {
+    return 'session_' + Date.now() + '_' + Math.random().toString(36).slice(2, 11);
+  }
   let sessionId;
   try {
-    sessionId = sessionStorage.getItem('guider_sid');
-    if (!sessionId) {
-      sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).slice(2, 11);
-      sessionStorage.setItem('guider_sid', sessionId);
+    const saved = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+    if (saved && saved.id && Date.now() - saved.ts < SESSION_TTL_MS) {
+      sessionId = saved.id;
+    } else {
+      sessionId = sessionStorage.getItem('guider_sid') || newSessionId();
     }
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ id: sessionId, ts: Date.now() }));
   } catch (e) {
-    sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).slice(2, 11);
+    sessionId = newSessionId();
   }
+
+  // Report the logged-in Salla customer for this session. Runs on every page,
+  // including checkout and thank-you where the chat itself is hidden.
+  // Salla's storefront SDK may load after this script, so retry briefly.
+  function identifyCustomer(attempt) {
+    let customerId = null;
+    try {
+      const cfg = window.salla && window.salla.config;
+      if (cfg && typeof cfg.get === 'function') customerId = cfg.get('user.id');
+    } catch (e) {}
+    if (!customerId) {
+      if (attempt < 10) setTimeout(function() { identifyCustomer(attempt + 1); }, 1000);
+      return;
+    }
+    const key = 'guider_identified_' + sessionId + '_' + customerId;
+    try { if (sessionStorage.getItem(key)) return; } catch (e) {}
+    fetch(API + '/api/identify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: sessionId, customerId: String(customerId) }),
+      keepalive: true
+    }).then(function(r) {
+      if (r.ok) { try { sessionStorage.setItem(key, '1'); } catch (e) {} }
+    }).catch(function() {});
+  }
+  identifyCustomer(0);
 
   // ============================================
   // URL EXCLUSION — Don't show widget on these pages
