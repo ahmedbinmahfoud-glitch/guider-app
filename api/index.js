@@ -568,7 +568,8 @@ function mapProduct(storeId, p) {
     status: p.status || null,
     is_available: typeof p.is_available === 'boolean' ? p.is_available : (p.status ? p.status === 'sale' : null),
     quantity: unlimited ? null : (Number.isInteger(p.quantity) ? p.quantity : null),
-    price: amount(p.price),
+    // taxed_price is what the shopper pays (VAT-inclusive); price can be pre-tax.
+    price: amount(p.taxed_price) ?? amount(p.price),
     regular_price: amount(p.regular_price),
     sale_price: amount(p.sale_price),
     currency: price.currency || (p.regular_price && p.regular_price.currency) || null,
