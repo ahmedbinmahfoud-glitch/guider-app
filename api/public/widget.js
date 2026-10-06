@@ -36,17 +36,17 @@
 
   // Report the logged-in Salla customer for this session. Runs on every page,
   // including checkout and thank-you where the chat itself is hidden.
-  // Salla's storefront SDK may load after this script, so retry briefly.
-  function identifyCustomer(attempt) {
+  // Salla populates user.id for guests too, so only a non-guest id counts.
+  // The storefront SDK may load after this script: wait for salla.onReady,
+  // or poll briefly if the SDK isn't on the page yet.
+  function identifyCustomer() {
     let customerId = null;
     try {
-      const cfg = window.salla && window.salla.config;
-      if (cfg && typeof cfg.get === 'function') customerId = cfg.get('user.id');
+      const cfg = window.salla.config;
+      const guest = typeof cfg.isGuest === 'function' ? cfg.isGuest() : true;
+      if (!guest) customerId = cfg.get('user.id');
     } catch (e) {}
-    if (!customerId) {
-      if (attempt < 10) setTimeout(function() { identifyCustomer(attempt + 1); }, 1000);
-      return;
-    }
+    if (!customerId) return;
     const key = 'guider_identified_' + sessionId + '_' + customerId;
     try { if (sessionStorage.getItem(key)) return; } catch (e) {}
     fetch(API + '/api/identify', {
@@ -58,7 +58,13 @@
       if (r.ok) { try { sessionStorage.setItem(key, '1'); } catch (e) {} }
     }).catch(function() {});
   }
-  identifyCustomer(0);
+  (function waitForSalla(attempt) {
+    if (window.salla && typeof window.salla.onReady === 'function') {
+      window.salla.onReady(identifyCustomer);
+    } else if (attempt < 20) {
+      setTimeout(function() { waitForSalla(attempt + 1); }, 500);
+    }
+  })(0);
 
   // ============================================
   // URL EXCLUSION — Don't show widget on these pages
