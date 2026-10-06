@@ -87,7 +87,13 @@
     }
    ],
    "user": "خلصت، شكراً",
-   "baseline_reply": "تمام، بالعافية مسبقاً ☕\nأنا هنا لو احتجت شي 🙂"
+   "baseline_reply": "تمام، بالعافية مسبقاً ☕\nأنا هنا لو احتجت شي 🙂",
+   "expected": {
+    "verdict": "good",
+    "guidance": "Short, warm close. Keep.",
+    "rated_by": "Ahmed",
+    "rated_on": "2026-10-06"
+   }
   },
   {
    "id": "stock_alternatives_96507264af",
@@ -185,7 +191,13 @@
     }
    ],
    "user": "لا غيرهم ، كالاداس فكرت فيه بس غالي ، عطني شيء اقتصادي ولذيذ",
-   "baseline_reply": "**[روينزوري](https://driponcoffeesa.com/ar/?product_id=109623881) الأوغندي** — الأوفر في الكتالوج وما يخذلك.\n\nأناناس وبرقوق واستوائي — فاكهي خفيف قريب من ذايقة [هاسيندا](https://driponcoffeesa.com/ar/?product_id=109623881)، بسعر مريح.\n\nالسعر:\n• ١٢٥ جرام — ٣٢.٨٦ ريال\n• ٢٥٠ جرام — ٤٣.٧٠ ريال\n• كيلو — ١٢١.٢١ ريال بدل ١٤٢.٦٠ (خصم ١٥٪)\n\nCHOICES: [أخذ روينزوري] [وريني خيار ثاني] [تبغى الوصفة؟]"
+   "baseline_reply": "**[روينزوري](https://driponcoffeesa.com/ar/?product_id=109623881) الأوغندي** — الأوفر في الكتالوج وما يخذلك.\n\nأناناس وبرقوق واستوائي — فاكهي خفيف قريب من ذايقة [هاسيندا](https://driponcoffeesa.com/ar/?product_id=109623881)، بسعر مريح.\n\nالسعر:\n• ١٢٥ جرام — ٣٢.٨٦ ريال\n• ٢٥٠ جرام — ٤٣.٧٠ ريال\n• كيلو — ١٢١.٢١ ريال بدل ١٤٢.٦٠ (خصم ١٥٪)\n\nCHOICES: [أخذ روينزوري] [وريني خيار ثاني] [تبغى الوصفة؟]",
+   "expected": {
+    "verdict": "needs_work",
+    "guidance": "Justify the price before switching: Caldas costs more than the classic lots because it is a Colombian lot with extended-drying processing and high fruitiness. Then offer the classic, economical lots: Colombian Hacienda, Ugandan Rwenzori, El Salvador, Ethiopian Hambela. One product is not enough; the customer asked for value.",
+    "rated_by": "Ahmed",
+    "rated_on": "2026-10-06"
+   }
   },
   {
    "id": "grind_machine_0ca25bc163",
@@ -215,7 +227,13 @@
     }
    ],
    "user": "درجة الطحن fellow ode 2",
-   "baseline_reply": "Fellow Ode 2 ممتاز للـV60 👌\n\nلـ**[كوتون كاندي](https://driponcoffeesa.com/ar/?product_id=429963774)** مثلج، ابدأ من **درجة 4.5 إلى 5** — طحن متوسط ناعم.\n\nلو الكوب طلع حامض حاد: نزّل لـ4\nلو طلع باهت أو بطيء: ارفع لـ5.5\n\nCHOICES: [أخذ كوتون كاندي] [وريني محاصيل لاهوائية ثانية]"
+   "baseline_reply": "Fellow Ode 2 ممتاز للـV60 👌\n\nلـ**[كوتون كاندي](https://driponcoffeesa.com/ar/?product_id=429963774)** مثلج، ابدأ من **درجة 4.5 إلى 5** — طحن متوسط ناعم.\n\nلو الكوب طلع حامض حاد: نزّل لـ4\nلو طلع باهت أو بطيء: ارفع لـ5.5\n\nCHOICES: [أخذ كوتون كاندي] [وريني محاصيل لاهوائية ثانية]",
+   "expected": {
+    "verdict": "needs_work",
+    "guidance": "Grind is tuned together with water temperature to reach the target acidity/fruitiness/aroma. Start at grind 5 with water at 92 C; if acidity is too high, adjust by two steps of grind and temperature until the taste is right. Same starting point every time: never invent different numbers per conversation.",
+    "rated_by": "Ahmed",
+    "rated_on": "2026-10-06"
+   }
   },
   {
    "id": "grind_machine_08606476e8",
@@ -519,7 +537,13 @@
     }
    ],
    "user": "بما انه اعجبني الكوتون كاندي وش ترشح لي",
-   "baseline_reply": "ال[كوتون كاندي](https://driponcoffeesa.com/ar/?product_id=742068134) عندك ذوق 😄 — حمضيات وبرتقال وكراميل، نكهة مبهجة.\n\nأقرب شي ليه من نفس العائلة **[ريد فروت](https://driponcoffeesa.com/ar/?product_id=163951245) لاهوائي** — فانيلا، ليمون، فواكه حمراء. نفس الجرأة الفاكهية بس باتجاه أكثر حلاوة وعمق.\n\nالسعر:\n• ١٢٥ جرام — ٦٠.٠٥ ريال\n• ٢٥٠ جرام — ٨٩.٧٠ ريال\n• كيلو — ٢٩٢.٨٢ ريال بدل ٣٤٤.٥١ (خصم ١٥٪)\n\nتجيك حبوب كاملة.\n\nCHOICES: [أخذ ريد فروت] [وريني خيار ثاني] [تبغى الوصفة؟]"
+   "baseline_reply": "ال[كوتون كاندي](https://driponcoffeesa.com/ar/?product_id=742068134) عندك ذوق 😄 — حمضيات وبرتقال وكراميل، نكهة مبهجة.\n\nأقرب شي ليه من نفس العائلة **[ريد فروت](https://driponcoffeesa.com/ar/?product_id=163951245) لاهوائي** — فانيلا، ليمون، فواكه حمراء. نفس الجرأة الفاكهية بس باتجاه أكثر حلاوة وعمق.\n\nالسعر:\n• ١٢٥ جرام — ٦٠.٠٥ ريال\n• ٢٥٠ جرام — ٨٩.٧٠ ريال\n• كيلو — ٢٩٢.٨٢ ريال بدل ٣٤٤.٥١ (خصم ١٥٪)\n\nتجيك حبوب كاملة.\n\nCHOICES: [أخذ ريد فروت] [وريني خيار ثاني] [تبغى الوصفة؟]",
+   "expected": {
+    "verdict": "needs_work",
+    "guidance": "Name the pattern: liking Cotton Candy means the customer likes anaerobic lots. Say the store has about 10 anaerobic lots (grape, peach, watermelon, berry, strawberry, passion fruit, ...) and list the in-stock ones, instead of jumping to a single product.",
+    "rated_by": "Ahmed",
+    "rated_on": "2026-10-06"
+   }
   },
   {
    "id": "caffeine_health_ca90bd6447",
@@ -595,7 +619,13 @@
     }
    ],
    "user": "Fellow ode 2",
-   "baseline_reply": "**Fellow Ode 2 — إعداد V60 مثلج ل[هوليستن](https://driponcoffeesa.com/ar/?product_id=853914068):**\n\nابدأ من **رقم 3.0 – 3.5** وعدّل حسب النتيجة:\n\n- طلعت حامضة → نزّل لـ 2.5\n- طلعت قابضة → ارفع لـ 4.0\n- تنزل بسرعة → نزّل الرقم\n- تنزل ببطء → ارفع الرقم\n\nهوليستن لاهوائي ونكهته جريئة — الطحن الصح يفرق كثير في وضوح ال[عنب](https://driponcoffeesa.com/ar/?product_id=938446689) والكيوي.\n\nCHOICES: [أخذ ١٢٥ جرام] [أخذ ٢٥٠ جرام] [أخذ كيلو]"
+   "baseline_reply": "**Fellow Ode 2 — إعداد V60 مثلج ل[هوليستن](https://driponcoffeesa.com/ar/?product_id=853914068):**\n\nابدأ من **رقم 3.0 – 3.5** وعدّل حسب النتيجة:\n\n- طلعت حامضة → نزّل لـ 2.5\n- طلعت قابضة → ارفع لـ 4.0\n- تنزل بسرعة → نزّل الرقم\n- تنزل ببطء → ارفع الرقم\n\nهوليستن لاهوائي ونكهته جريئة — الطحن الصح يفرق كثير في وضوح ال[عنب](https://driponcoffeesa.com/ar/?product_id=938446689) والكيوي.\n\nCHOICES: [أخذ ١٢٥ جرام] [أخذ ٢٥٠ جرام] [أخذ كيلو]",
+   "expected": {
+    "verdict": "needs_work",
+    "guidance": "Same rule as the other Fellow Ode 2 case: start at grind 5, 92 C, adjust two steps of grind and temperature. The bot gave 3.0-3.5 here and 4.5-5 elsewhere for the same question: inconsistency is the failure.",
+    "rated_by": "Ahmed",
+    "rated_on": "2026-10-06"
+   }
   },
   {
    "id": "english_offtopic_33950cb8ff",
