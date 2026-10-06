@@ -57,6 +57,10 @@ An Arabic AI shopping assistant (Claude API) deployed as a widget on Salla store
 8. Dialect control needs a deterministic output filter (`enforceSaudi()`), not prompts alone.
 9. No fatigued production changes. If Ahmed is pushing a risky change late, say so.
 
+## Merchant rules
+
+Owner decisions about what the bot says (brewing numbers, discount codes, price objections) live in `docs/merchants/<store>-rules.md` (Drip On: `docs/merchants/dripon-rules.md`). Block 1 loads them into per-store config and product `metadata`. The regression set (`tests/regression/`) holds Ahmed's rated cases; `docs/insights/` holds the purchase-barrier analysis that sets Block 1's priorities (compatibility 34% of free-text sessions, taste 27%, specific product 27%, choice 20%, price 13%, stock 7%).
+
 ## Language rules for bot-facing content
 
 Saudi dialect strictly. No Egyptian or Levantine vocabulary. Prices VAT-inclusive (15%). Arabic RTL, English words in parentheses, no tashkeel in body text.
