@@ -163,12 +163,23 @@ function injectProductLinks(text) {
     if (OUT_OF_STOCK.some(o => o === bean)) continue;
     if (!body.includes(bean)) continue;
     const sizes = BEAN_LINKS[bean];
+    // Each size is its own product. Link 250 g unless the reply only talks
+    // about the kilo or only about 125 g.
+    const has250 = /٢٥٠|250/.test(body), hasKilo = /كيلو|١٠٠٠|1000/.test(body);
     let size = '250';
-    if (/كيلو|١٠٠٠|1000/.test(body) && sizes['1000']) size = '1000';
-    else if (/١٢٥|125/.test(body) && sizes['125']) size = '125';
+    if (hasKilo && !has250 && sizes['1000']) size = '1000';
+    else if (/١٢٥|125/.test(body) && !has250 && !hasKilo && sizes['125']) size = '125';
     linkOnce(bean, sizes[size] || sizes['250'] || Object.values(sizes)[0]);
   }
   return body + tail;
+}
+
+// Removes product links, keeping the name. Applied to the history sent to
+// Claude (it otherwise copies the link format and invents product ids) and to
+// Claude's reply, so the only product links are the ones injected above.
+function stripStoreLinks(text) {
+  if (typeof text !== 'string') return text;
+  return text.replace(/\[([^\]]+)\]\(https?:\/\/(?:www\.)?driponcoffeesa\.com[^)]*\)/g, '$1');
 }
 
 // Pre-filled WhatsApp link for qualified wholesale leads
@@ -1452,7 +1463,7 @@ module.exports = async (req, res) => {
         system: [
           { type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }
         ],
-        messages
+        messages: messages.map(m => m && m.role === 'assistant' ? { ...m, content: stripStoreLinks(m.content) } : m)
       });
 
       const u = response.usage || {};
@@ -1465,7 +1476,7 @@ module.exports = async (req, res) => {
 
       const rawBlock = response.content.find(b => b.type === 'text');
       const raw = rawBlock ? rawBlock.text : '';
-      const reply = injectProductLinks(raw);
+      const reply = injectProductLinks(stripStoreLinks(raw));
 
       const updatedMessages = [...messages, { role: 'assistant', content: reply }];
       const { recommendation, reached } = detectRecommendation(updatedMessages);
