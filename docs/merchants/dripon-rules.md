@@ -16,6 +16,7 @@ answer every time: the regression set checks consistency, not just correctness.
 - If a code is active, give it.
 - If no code is active, decline warmly, without promising future codes.
 - If the customer insists, hand off to customer service on WhatsApp: +966 54 911 1266 (`https://wa.me/966549111266`).
+- Status 2026-10-08: no code is active. D10, EID25 and EID20 have all ended. The kilo discount ended too.
 
 ## Contacts (confirmed by Ahmed 2026-10-07, both shown in the store)
 - Customer service WhatsApp: +966 54 911 1266 (`https://wa.me/966549111266`).

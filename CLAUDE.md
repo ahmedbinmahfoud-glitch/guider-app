@@ -71,6 +71,7 @@ Saudi dialect strictly. No Egyptian or Levantine vocabulary. Prices VAT-inclusiv
 - Attribution (Block 2 PR): the widget reports the logged-in Salla customer id per session to `/api/identify` (`session_identities` table); order webhooks join on store + customer within 7 days to a session that had a conversation. Salla checkout requires login, so the thank-you page always carries the customer id. Needs live verification that `salla.config.get('user.id')` is populated on the storefront.
 - `logConversation` was fire-and-forget (not awaited, HTTP status ignored), so Vercel froze the function before the insert finished and turns were silently lost. Fixed in the Block 0 PR (awaited + non-2xx logged).
 - `enforceSaudi()` not built yet.
+- Catalog hotfix 2026-10-08: the prompt's prices, notes and stock were refreshed from the team's store export (kilo discount ended; new beans added; discontinued: Rimasila, Coconut Lemonade beans). Bot product links now use `https://driponcoffeesa.com/ar/product/p<id>` (Salla redirects it to the product page); the old `/ar/?product_id=<id>` form opened the home page, so every bot product link was dead until this fix. Until the tools replace the hardcoded catalog, any price/stock change in the store needs the same manual refresh.
 - Product rules (milk suitability, grind, cross-sell, intent triggers) live in the prompt; must move to per-product `metadata` JSONB so one prompt serves all merchants.
 - A flat `SALLA_ACCESS_TOKEN` env var conflicts with per-store tokens in `stores`. Don't delete until Block 1 replaces its usage.
 

@@ -4,6 +4,8 @@
 //
 //   node scripts/regression.js [baseUrl] [--only=<case-id-substring>]
 //
+// baseUrl defaults to production. For a protected Vercel preview, set
+// VERCEL_BYPASS to the project's automation-bypass secret.
 // baseUrl defaults to production. Each case sends its recorded history plus the
 // user turn with a `session_regress_*` id, which the server never logs, so runs
 // don't pollute conversation data or analytics.
@@ -24,7 +26,10 @@ async function run(c) {
   try {
     const res = await fetch(`${BASE}/api/index`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Origin': ORIGIN },
+      headers: {
+        'Content-Type': 'application/json', 'Origin': ORIGIN,
+        ...(process.env.VERCEL_BYPASS ? { 'x-vercel-protection-bypass': process.env.VERCEL_BYPASS } : {})
+      },
       body: JSON.stringify({
         messages: [...c.history, { role: 'user', content: c.user }],
         sessionId: `session_regress_${c.source}`
