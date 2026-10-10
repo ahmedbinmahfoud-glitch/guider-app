@@ -1310,6 +1310,10 @@ ${BAR}
 - لا ترشّح منتج available=false. لو الزبون سأله بالاسم: قل إنه غير متوفر حالياً، وابحث عن بديل بنفس النكهات أو الأسلوب، أو ظرفه لو متوفر.
 - لا تخترع نكهات أو مكونات باكج أو معلومات غير اللي في نتائج الأداة.
 - للحليب: رشّح فقط المنتجات اللي milk=true.
+- المعالجة والنكهات والمنشأ والحموضة: اذكرها فقط كما رجعت من الأداة. لو المعلومة مو موجودة، لا تخمّنها.
+- لو المنتج غير متوفر: اعرض البديل المتوفر **في نفس الرد** بسعره، لا تسأل "تبغى بديل؟".
+- لا تكتب أي نص قبل استخدام الأداة. ابحث أولاً ثم اكتب ردك كامل.
+- الروابط داخل نص الرد فقط، **ممنوع داخل CHOICES**.
 - الأظرف تُباع بالراحة، لا تذكر سعرها في الاقتراح إلا لو سأل.
 
 `;
@@ -1348,11 +1352,21 @@ async function chatWithPromptCatalog(messages) {
   return injectProductLinks(stripStoreLinks(textOf(response)));
 }
 
+// Product links stay in the body; inside CHOICES a link would make the widget
+// drop the button, so links there are reduced to their text.
+function finishToolReply(text, allowed) {
+  const cut = text.indexOf('CHOICES:');
+  const body = cut === -1 ? text : text.slice(0, cut);
+  const tail = cut === -1 ? '' : text.slice(cut).replace(/\[([^\]]+)\]\([^)]*\)/g, '[$1]');
+  return keepAllowedLinks(body, allowed) + tail;
+}
+
 // Tool mode: Claude calls search_products (up to 4 rounds), then answers.
 // Only product URLs returned by the tool survive in the reply.
 const MAX_TOOL_ROUNDS = 4;
 async function chatWithTools(storeId, messages) {
   const allowed = new Set();
+  const texts = [];
   const convo = messages.map(m => m && m.role === 'assistant' ? { ...m, content: keepAllowedLinks(m.content, null) } : m);
   for (let round = 0; ; round++) {
     const last = round >= MAX_TOOL_ROUNDS;
@@ -1365,7 +1379,9 @@ async function chatWithTools(storeId, messages) {
       messages: convo
     });
     logUsage(response.usage, { round, stop: response.stop_reason });
-    if (response.stop_reason !== 'tool_use' || last) return keepAllowedLinks(textOf(response), allowed);
+    const text = textOf(response);
+    if (text) texts.push(text);
+    if (response.stop_reason !== 'tool_use' || last) return finishToolReply(texts.join('\n\n'), allowed);
     convo.push({ role: 'assistant', content: response.content });
     const results = await Promise.all(response.content.filter(b => b.type === 'tool_use').map(async b => {
       let out;

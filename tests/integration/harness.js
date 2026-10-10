@@ -173,12 +173,13 @@ srv.listen(8443, async () => {
   global.fakeClaude = async (params) => {
     calls.push(params);
     if (calls.length === 1) return { usage: {}, stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 't1', name: 'search_products', input: { milk: true } }] };
-    return { usage: {}, stop_reason: 'end_turn', content: [{ type: 'text', text: `أرشّح [أكيا](${U(10)}) و[كايا](${U(12)}) و[فيمتو](${U(13)}) ومعك [💬 واتساب](https://wa.me/966549111266)` }] };
+    return { usage: {}, stop_reason: 'end_turn', content: [{ type: 'text', text: `أرشّح [أكيا](${U(10)}) و[كايا](${U(12)}) و[فيمتو](${U(13)}) ومعك [💬 واتساب](https://wa.me/966549111266)\nCHOICES: [أخذ ٢٥٠ جرام](${U(10)}) [وريني غيره]` }] };
   };
   r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'أبغى قهوة للحليب' }], sessionId: 'session_regress_tools1' });
   const toolResult = JSON.parse(calls[1].messages.at(-1).content[0].content);
   ok('tools: search filters milk and groups sizes', toolResult.count === 1 && toolResult.results[0].name === 'أكيا' && toolResult.results[0].sizes.length === 2 && toolResult.results[0].sizes[1].price === 137.71);
   ok('tools: prompt has no hardcoded catalog', !calls[0].system[0].text.includes('١٤٧.٩٥') && calls[0].tools[0].name === 'search_products');
+  ok('tools: no links inside CHOICES', r.body.reply.includes('CHOICES: [أخذ ٢٥٠ جرام] [وريني غيره]'));
   ok('tools: only looked-up product links survive', r.body.reply.includes(`[أكيا](${U(10)})`) && !r.body.reply.includes(U(12)) && !r.body.reply.includes(U(13)) && r.body.reply.includes('wa.me'));
   calls.length = 0;
   global.fakeClaude = async (params) => { calls.push(params); return { usage: {}, stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 't' + calls.length, name: 'search_products', input: { query: 'فيمتو', include_unavailable: true } }] }; };
