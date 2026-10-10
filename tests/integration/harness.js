@@ -186,6 +186,11 @@ srv.listen(8443, async () => {
   r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'فيمتو؟' }], sessionId: 'session_regress_tools2' });
   ok('tools: loop is capped and the last round disables tools', calls.length === 5 && calls[4].tool_choice && calls[4].tool_choice.type === 'none' && r.status === 200);
   ok('tools: unavailable shown only when asked', JSON.parse(calls[1].messages.at(-1).content[0].content).results[0].sizes[0].available === false);
+  calls.length = 0;
+  global.fakeClaude = async (params) => { calls.push(params); return { usage: {}, stop_reason: 'end_turn', content: [{ type: 'text', text: 'تمام' }] }; };
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'assistant', content: 'أرشّحلك كايا' }, { role: 'user', content: 'وأكيا كيف طعمه؟' }], sessionId: 'session_regress_tools4' });
+  const auto = calls[0].messages.at(-1).content[0];
+  ok('tools: named products are looked up before answering', auto.type === 'tool_result' && JSON.parse(auto.content).results.map(x => x.name).sort().join() === ['أكيا', 'كايا'].sort().join());
   process.env.TOOLS_STORES = ''; global.fakeClaude = null;
   r = await call(h, 'POST', '/api/index', DRIP, { messages: msg, sessionId: 'session_regress_tools3' });
   ok('tools off: prompt-catalog mode unchanged', r.status === 200 && r.body.reply.includes('حراز'));

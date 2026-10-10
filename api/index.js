@@ -1369,6 +1369,17 @@ async function chatWithTools(storeId, messages) {
   const allowed = new Set();
   const texts = [];
   const convo = messages.map(m => m && m.role === 'assistant' ? { ...m, content: keepAllowedLinks(m.content, null) } : m);
+  // Products named in the customer's message or the bot's previous reply are
+  // looked up before Claude answers, so facts about them come from the
+  // catalog even when Claude would not call the tool on its own.
+  const recent = convo.slice(-2).map(m => typeof m.content === 'string' ? m.content : '').join('\n');
+  const named = await catalog.mentioned(storeId, recent);
+  if (named.length && convo.length && convo[convo.length - 1].role === 'user') {
+    const out = await catalog.lookup(storeId, named);
+    collectUrls(out, allowed);
+    convo.push({ role: 'assistant', content: [{ type: 'tool_use', id: 'auto_lookup', name: 'search_products', input: { query: named.join('، '), include_unavailable: true } }] });
+    convo.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'auto_lookup', content: JSON.stringify(out) }] });
+  }
   for (let round = 0; ; round++) {
     const last = round >= MAX_TOOL_ROUNDS;
     const response = await anthropic.messages.create({
