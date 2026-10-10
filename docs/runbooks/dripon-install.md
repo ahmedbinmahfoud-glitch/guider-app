@@ -21,6 +21,8 @@ Run this the day Salla approves the private app. Ahmed does the browser steps; t
 5. **Agent, with Ahmed's approval:** relabels history from `dripon` to the Salla id in `conversations` and `session_identities`, so analytics stay continuous and customers who chatted in the 7 days before install still get their orders attributed.
 6. **First real order:** agent checks that `orders` received it, with `store_id` = Salla id, no contact details stored, and `session_id` filled when the customer had chatted.
 
+7. **Agent:** copies product knowledge from the staging rows to the synced rows: `update products t set metadata = s.metadata from products s where s.store_id='dripon' and t.store_id='<salla id>' and t.salla_product_id = s.salla_product_id`, then lists synced products with empty `metadata` (new products) for Ahmed's team to describe.
+
 ## After (follow-up PR)
 - Remove the `STATIC_ORIGINS` entries for driponcoffeesa.com once steps 1–6 hold for 48 h, so Drip On has exactly one store id.
 - Switch the bot from the hardcoded catalog to the Block 1 tools after the regression set shows parity on Drip On's synced catalog.

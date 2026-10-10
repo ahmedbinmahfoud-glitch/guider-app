@@ -58,7 +58,7 @@ https.request = function(opts, cb) {
 const origResolve = Module._resolveFilename;
 Module._resolveFilename = function(r, ...a) { return r === '@anthropic-ai/sdk' ? '/fake-anthropic' : origResolve.call(this, r, ...a); };
 require.cache['/fake-anthropic'] = { id: '/fake-anthropic', filename: '/fake-anthropic', loaded: true,
-  exports: class { constructor() { this.messages = { create: async () => ({ usage: {}, content: [{ type: 'text', text: 'هلا! جرب حراز' }] }) }; } } };
+  exports: class { constructor() { this.messages = { create: async (params) => global.fakeClaude ? global.fakeClaude(params) : ({ usage: {}, content: [{ type: 'text', text: 'هلا! جرب حراز' }] }) }; } } };
 
 function call(handler, method, url, headers, body) {
   return new Promise((resolve) => {
@@ -160,5 +160,39 @@ srv.listen(8443, async () => {
   ok('webhook product update upserts live', p2.price === 99 && p2.is_available === true);
   r = await call(h, 'POST', '/api/salla/webhook', { authorization: 'Bearer privatesecret' }, { event: 'product.deleted', merchant: 'S1', data: { id: 1 } });
   ok('webhook product.deleted marks removed', !!p1.removed_at);
+
+  // Tool mode (Block 1)
+  process.env.TOOLS_STORES = 'dripon';
+  const U = id => 'https://driponcoffeesa.com/ar/product/p' + id;
+  db.products.push(
+    { store_id: 'dripon', salla_product_id: '10', name: 'أكيا 250', price: 42.55, is_available: true, url: U(10), metadata: { type: 'beans', bean: 'أكيا', size_g: 250, notes: ['شوكولاتة'], milk: true } },
+    { store_id: 'dripon', salla_product_id: '11', name: 'أكيا كيلو', price: 137.71, is_available: true, url: U(11), metadata: { type: 'beans', bean: 'أكيا', size_g: 1000, notes: ['شوكولاتة'], milk: true } },
+    { store_id: 'dripon', salla_product_id: '12', name: 'كايا 250', price: 62.88, is_available: true, url: U(12), metadata: { type: 'beans', bean: 'كايا', size_g: 250, notes: ['توت مشكل'], milk: false } },
+    { store_id: 'dripon', salla_product_id: '13', name: 'فيمتو 250', price: 80, is_available: false, url: U(13), metadata: { type: 'beans', bean: 'فيمتو', size_g: 250, notes: ['كرز'], milk: false } });
+  const calls = [];
+  global.fakeClaude = async (params) => {
+    calls.push(params);
+    if (calls.length === 1) return { usage: {}, stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 't1', name: 'search_products', input: { milk: true } }] };
+    return { usage: {}, stop_reason: 'end_turn', content: [{ type: 'text', text: `أرشّح [أكيا](${U(10)}) و[كايا](${U(12)}) و[فيمتو](${U(13)}) ومعك [💬 واتساب](https://wa.me/966549111266)\nCHOICES: [أخذ ٢٥٠ جرام](${U(10)}) [وريني غيره]` }] };
+  };
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'أبغى قهوة للحليب' }], sessionId: 'session_regress_tools1' });
+  const toolResult = JSON.parse(calls[1].messages.at(-1).content[0].content);
+  ok('tools: search filters milk and groups sizes', toolResult.count === 1 && toolResult.results[0].name === 'أكيا' && toolResult.results[0].sizes.length === 2 && toolResult.results[0].sizes[1].price === 137.71);
+  ok('tools: prompt has no hardcoded catalog', !calls[0].system[0].text.includes('١٤٧.٩٥') && calls[0].tools[0].name === 'search_products');
+  ok('tools: no links inside CHOICES', r.body.reply.includes('CHOICES: [أخذ ٢٥٠ جرام] [وريني غيره]'));
+  ok('tools: only looked-up product links survive', r.body.reply.includes(`[أكيا](${U(10)})`) && !r.body.reply.includes(U(12)) && !r.body.reply.includes(U(13)) && r.body.reply.includes('wa.me'));
+  calls.length = 0;
+  global.fakeClaude = async (params) => { calls.push(params); return { usage: {}, stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 't' + calls.length, name: 'search_products', input: { query: 'فيمتو', include_unavailable: true } }] }; };
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'فيمتو؟' }], sessionId: 'session_regress_tools2' });
+  ok('tools: loop is capped and the last round disables tools', calls.length === 5 && calls[4].tool_choice && calls[4].tool_choice.type === 'none' && r.status === 200);
+  ok('tools: unavailable shown only when asked', JSON.parse(calls[1].messages.at(-1).content[0].content).results[0].sizes[0].available === false);
+  calls.length = 0;
+  global.fakeClaude = async (params) => { calls.push(params); return { usage: {}, stop_reason: 'end_turn', content: [{ type: 'text', text: 'تمام' }] }; };
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'assistant', content: 'أرشّحلك كايا' }, { role: 'user', content: 'وأكيا كيف طعمه؟' }], sessionId: 'session_regress_tools4' });
+  const auto = calls[0].messages.at(-1).content[0];
+  ok('tools: named products are looked up before answering', auto.type === 'tool_result' && JSON.parse(auto.content).results.map(x => x.name).sort().join() === ['أكيا', 'كايا'].sort().join());
+  process.env.TOOLS_STORES = ''; global.fakeClaude = null;
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: msg, sessionId: 'session_regress_tools3' });
+  ok('tools off: prompt-catalog mode unchanged', r.status === 200 && r.body.reply.includes('حراز'));
   srv.close();
 });

@@ -182,6 +182,16 @@ function stripStoreLinks(text) {
   return text.replace(/\[([^\]]+)\]\(https?:\/\/(?:www\.)?driponcoffeesa\.com[^)]*\)/g, '$1');
 }
 
+// ---------- Catalog tools (Block 1) ----------
+// Stores listed in TOOLS_STORES answer from the synced products table through
+// search_products instead of the hardcoded prompt catalog. Unset in
+// production until a store passes the regression set; set on Preview to test.
+const { createCatalog, collectUrls, keepAllowedLinks } = require('../lib/catalog');
+const catalog = createCatalog((...a) => sb(...a));
+function toolsEnabled(storeId) {
+  return (process.env.TOOLS_STORES || '').split(',').map(x => x.trim()).filter(Boolean).includes(String(storeId));
+}
+
 // Pre-filled WhatsApp link for qualified wholesale leads
 function buildWholesaleLink(details) {
   const msg = 'طلب جملة | ' + (details || 'من مساعد Guider');
@@ -1286,6 +1296,122 @@ CHOICES: [فاكهي 🌸] [كلاسيكي 🍂] [ما أعرف]
 - الزبون أولاً، البيع ثانياً
 - اقتراح واحد، ثم اسكت`;
 
+// Tool mode: the same prompt without the hardcoded catalog, prices, stock and
+// link tables; the model looks products up with search_products and links
+// only to URLs the tool returned.
+const BAR = '═══════════════════════════════════';
+const TOOL_CATALOG_RULES = `${BAR}
+🛒 المنتجات والأسعار — من أداة البحث فقط
+${BAR}
+- **قبل أي توصية أو ذكر سعر أو توفر: استخدم search_products.** لا تعتمد على ذاكرتك.
+- الأسماء والأسعار في أمثلة المسارات تحت **للتوضيح فقط وقد تكون قديمة**. السعر المعتمد الوحيد هو اللي ترجعه الأداة.
+- اذكر السعر كما رجع من الأداة (شامل الضريبة)، كل حجم على سطر بنقطة.
+- ما فيه خصم على الكيلو. لا تذكر أي خصم.
+- لا ترشّح منتج available=false. لو الزبون سأله بالاسم: قل إنه غير متوفر حالياً، وابحث عن بديل بنفس النكهات أو الأسلوب، أو ظرفه لو متوفر.
+- لا تخترع نكهات أو مكونات باكج أو معلومات غير اللي في نتائج الأداة.
+- للحليب: رشّح فقط المنتجات اللي milk=true.
+- أي معلومة عن منتج (نكهات، معالجة، منشأ، حموضة، سعر، توفر) — **حتى لو ذكرته قبل في المحادثة** — تحقق منها بالأداة قبل ما تكتبها. لو المعلومة مو موجودة في النتيجة، لا تخمّنها.
+- اتبع المسارات وأسئلتها تحت كما هي. الأداة ما تضيف أسئلة: "مع الحليب" بدون تفاصيل → رشّح مباشرة أفضل منتج milk=true.
+- لو المنتج غير متوفر أو مو موجود: اعرض البديل المتوفر **في نفس الرد** باسمه ورابطه وسعره، لا تسأل "تبغى بديل؟". مثال: "ظرف فيمتو غير متوفر حالياً. الأقرب له [عنب لاهوائي](رابط) — توت أسود وبرقوق" ثم السعر.
+- لا تكتب أي نص قبل استخدام الأداة. ابحث أولاً ثم اكتب ردك كامل.
+- الروابط داخل نص الرد فقط، **ممنوع داخل CHOICES**.
+- الأظرف تُباع بالراحة، لا تذكر سعرها في الاقتراح إلا لو سأل.
+
+`;
+function buildToolPrompt(base) {
+  const start = base.indexOf(BAR + '\n💰 الأسعار والخصومات');
+  const end = base.indexOf(BAR + '\n🎟️ أكواد الخصم');
+  if (start === -1 || end === -1) throw new Error('tool prompt markers missing');
+  let out = base.slice(0, start) + TOOL_CATALOG_RULES + base.slice(end);
+  out = out.replace(/\*\*لا تكتب روابط منتجات بنفسك أبداً\.\*\*[^\n]*\n[^\n]*\n/,
+    '**روابط المنتجات:** اكتب رابط المنتج اللي ترشّحه مرة وحدة بصيغة [اسم المنتج](url)، والـ url من نتائج search_products فقط، للحجم اللي تقترحه (٢٥٠ جرام افتراضياً). أي رابط غيره ينحذف تلقائياً.\n');
+  return out;
+}
+const TOOL_SYSTEM_PROMPT = buildToolPrompt(SYSTEM_PROMPT);
+
+function logUsage(u, extra) {
+  u = u || {};
+  console.log('USAGE', JSON.stringify({
+    in: u.input_tokens, out: u.output_tokens,
+    cache_read: u.cache_read_input_tokens, cache_write: u.cache_creation_input_tokens, ...extra
+  }));
+}
+
+function textOf(response) {
+  return response.content.filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+}
+
+// Hardcoded-catalog mode (prompt v7): links are injected from BEAN_LINKS.
+async function chatWithPromptCatalog(messages) {
+  const response = await anthropic.messages.create({
+    model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-6',
+    max_tokens: 800,
+    system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
+    messages: messages.map(m => m && m.role === 'assistant' ? { ...m, content: stripStoreLinks(m.content) } : m)
+  });
+  logUsage(response.usage);
+  return injectProductLinks(stripStoreLinks(textOf(response)));
+}
+
+// Product links stay in the body; inside CHOICES a link would make the widget
+// drop the button, so links there are reduced to their text.
+function finishToolReply(text, allowed) {
+  const cut = text.indexOf('CHOICES:');
+  const body = cut === -1 ? text : text.slice(0, cut);
+  const tail = cut === -1 ? '' : text.slice(cut).replace(/\[([^\]]+)\]\([^)]*\)/g, '[$1]');
+  return keepAllowedLinks(body, allowed) + tail;
+}
+
+// Tool mode: Claude calls search_products (up to 4 rounds), then answers.
+// Only product URLs returned by the tool survive in the reply.
+const MAX_TOOL_ROUNDS = 4;
+async function chatWithTools(storeId, messages) {
+  const allowed = new Set();
+  const texts = [];
+  const convo = messages.map(m => m && m.role === 'assistant' ? { ...m, content: keepAllowedLinks(m.content, null) } : m);
+  // Products named in the conversation (newest first, up to 4) are looked up
+  // before Claude answers, so facts about them come from the
+  // catalog even when Claude would not call the tool on its own.
+  const named = [];
+  for (const m of [...convo].reverse()) {
+    if (named.length >= 4) break;
+    for (const n of await catalog.mentioned(storeId, typeof m.content === 'string' ? m.content : '')) {
+      if (!named.includes(n) && named.length < 4) named.push(n);
+    }
+  }
+  if (named.length && convo.length && convo[convo.length - 1].role === 'user') {
+    const out = await catalog.lookup(storeId, named);
+    collectUrls(out, allowed);
+    convo.push({ role: 'assistant', content: [{ type: 'tool_use', id: 'auto_lookup', name: 'search_products', input: { query: named.join('، '), include_unavailable: true } }] });
+    convo.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'auto_lookup', content: JSON.stringify(out) }] });
+  }
+  for (let round = 0; ; round++) {
+    const last = round >= MAX_TOOL_ROUNDS;
+    const response = await anthropic.messages.create({
+      model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-6',
+      max_tokens: 1200,
+      system: [{ type: 'text', text: TOOL_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
+      tools: catalog.TOOLS,
+      ...(last ? { tool_choice: { type: 'none' } } : {}),
+      messages: convo
+    });
+    logUsage(response.usage, { round, stop: response.stop_reason });
+    const text = textOf(response);
+    if (text) texts.push(text);
+    // The final answer stands alone; text written before a tool call is used
+    // only if the final round wrote nothing.
+    if (response.stop_reason !== 'tool_use' || last) return finishToolReply(text || texts.join('\n\n'), allowed);
+    convo.push({ role: 'assistant', content: response.content });
+    const results = await Promise.all(response.content.filter(b => b.type === 'tool_use').map(async b => {
+      let out;
+      try { out = await catalog.run(storeId, b.name, b.input); } catch (err) { out = { error: err.message }; }
+      collectUrls(out, allowed);
+      return { type: 'tool_result', tool_use_id: b.id, content: JSON.stringify(out), ...(out && out.error ? { is_error: true } : {}) };
+    }));
+    convo.push({ role: 'user', content: results });
+  }
+}
+
 module.exports = async (req, res) => {
   const storeId = await applyCors(req, res);
 
@@ -1476,26 +1602,9 @@ module.exports = async (req, res) => {
         return res.json({ reply: 'خذ نفس بسيط وجرب بعد شوي 🙂' });
       }
 
-      const response = await anthropic.messages.create({
-        model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-6',
-        max_tokens: 800,
-        system: [
-          { type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }
-        ],
-        messages: messages.map(m => m && m.role === 'assistant' ? { ...m, content: stripStoreLinks(m.content) } : m)
-      });
-
-      const u = response.usage || {};
-      console.log('USAGE', JSON.stringify({
-        in: u.input_tokens,
-        out: u.output_tokens,
-        cache_read: u.cache_read_input_tokens,
-        cache_write: u.cache_creation_input_tokens
-      }));
-
-      const rawBlock = response.content.find(b => b.type === 'text');
-      const raw = rawBlock ? rawBlock.text : '';
-      const reply = injectProductLinks(stripStoreLinks(raw));
+      const reply = toolsEnabled(storeId)
+        ? await chatWithTools(storeId, messages)
+        : await chatWithPromptCatalog(messages);
 
       const updatedMessages = [...messages, { role: 'assistant', content: reply }];
       const { recommendation, reached } = detectRecommendation(updatedMessages);
