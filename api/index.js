@@ -367,7 +367,10 @@ function verifySallaWebhook(req) {
 // (name, email, phone, birthday) stay in Salla and are read from there only
 // when a consented feature needs them.
 function extractOrderData(payload) {
-  const data = payload.data || payload;
+  // order.status.updated sends a status-history entry with the order nested
+  // under data.order; other order events send the order itself as data.
+  const outer = payload.data || payload;
+  const data = outer.order && typeof outer.order === 'object' ? outer.order : outer;
   const items = data.items || data.products || [];
   const productNames = items.map(item => item.name || item.product_name || '').filter(Boolean);
   const customer = data.customer || {};

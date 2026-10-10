@@ -105,6 +105,9 @@ srv.listen(8443, async () => {
   const pii = JSON.stringify(db.orders.at(-1));
   ok('order keeps no contact details', !/x@y\.z|555|1990-01-01|"B"/.test(pii) && db.orders.at(-1).customer_id === '88');
   ok('order keeps items for memory', JSON.stringify(db.orders.at(-1).raw_payload.items) === JSON.stringify([{ product_id: '321', sku_id: null, name: 'حراز', quantity: 2, total: 147.2 }]));
+  r = await call(h, 'POST', '/api/salla/webhook', { authorization: 'Bearer privatesecret' }, { event: 'order.status.updated', merchant: 999, data: { id: 4242, status: 'مكتمل', order: { id: 9, reference_id: 555, status: { name: 'مكتمل', slug: 'closed' }, customer: { id: 88 }, amounts: { total: { amount: 147.2, currency: 'SAR' } }, items: [{ name: 'حراز', product: { id: 321 } }] } } });
+  const su = db.orders.at(-1);
+  ok('status update reads the nested order', su.salla_order_id === '9' && su.customer_id === '88' && su.total_amount === 147.2 && su.raw_payload.status_slug === 'closed');
   r = await call(h, 'POST', '/api/salla/webhook', { authorization: 'Bearer publicsecret' }, { event: 'customer.updated', merchant: 999, data: { id: 55, mobile: '0500000000', email: 'a@b.c' } });
   const ev = db.salla_events.at(-1);
   ok('public secret accepted; customer event minimal, no PII', r.status === 200 && ev.raw_payload.entity_id === 55 && !JSON.stringify(ev).includes('0500000000'));
