@@ -101,6 +101,10 @@ srv.listen(8443, async () => {
   ok('order attributed to session', o && o.store_id === '999' && o.session_id === 'session_2_demodemo' && o.attribution_method === 'customer_id');
   r = await call(h, 'POST', '/api/salla/webhook', { authorization: 'Bearer privatesecret' }, { event: 'order.created', merchant: 999, data: { id: 8, customer: { id: 77 } } });
   ok('order with unknown customer not attributed', db.orders.at(-1).session_id === null);
+  r = await call(h, 'POST', '/api/salla/webhook', { authorization: 'Bearer privatesecret' }, { event: 'order.created', merchant: 999, data: { id: 9, customer: { id: 88, email: 'x@y.z', mobile: 555, first_name: 'B', birthday: { date: '1990-01-01' } }, items: [{ name: 'حراز', quantity: 2, product: { id: 321 }, amounts: { total: { amount: 147.2 } } }] } });
+  const pii = JSON.stringify(db.orders.at(-1));
+  ok('order keeps no contact details', !/x@y\.z|555|1990-01-01|"B"/.test(pii) && db.orders.at(-1).customer_id === '88');
+  ok('order keeps items for memory', JSON.stringify(db.orders.at(-1).raw_payload.items) === JSON.stringify([{ product_id: '321', sku_id: null, name: 'حراز', quantity: 2, total: 147.2 }]));
   r = await call(h, 'POST', '/api/salla/webhook', { authorization: 'Bearer publicsecret' }, { event: 'customer.updated', merchant: 999, data: { id: 55, mobile: '0500000000', email: 'a@b.c' } });
   const ev = db.salla_events.at(-1);
   ok('public secret accepted; customer event minimal, no PII', r.status === 200 && ev.raw_payload.entity_id === 55 && !JSON.stringify(ev).includes('0500000000'));

@@ -362,29 +362,39 @@ function verifySallaWebhook(req) {
   return ok;
 }
 
+// Keeps what measurement and customer memory need: who (Salla customer id),
+// what (products, quantities, amounts), when and where (city). Contact details
+// (name, email, phone, birthday) stay in Salla and are read from there only
+// when a consented feature needs them.
 function extractOrderData(payload) {
   const data = payload.data || payload;
   const items = data.items || data.products || [];
   const productNames = items.map(item => item.name || item.product_name || '').filter(Boolean);
   const customer = data.customer || {};
-  const customerName = [customer.first_name, customer.last_name].filter(Boolean).join(' ').trim()
-    || customer.name || null;
+  const amountOf = v => { const n = parseFloat(v && typeof v === 'object' ? v.amount : v); return isNaN(n) ? null : n; };
   return {
     salla_order_id: String(data.id || ''),
     salla_order_reference: data.reference_id || data.order_number || null,
     customer_id: customer.id ? String(customer.id) : null,
-    customer_email: customer.email || null,
-    customer_phone: customer.mobile || customer.phone || null,
-    customer_name: customerName,
     customer_city: customer.city || (data.shipping && data.shipping.address && data.shipping.address.city) || null,
     total_amount: parseFloat(data.total && data.total.amount) || parseFloat(data.amounts && data.amounts.total && data.amounts.total.amount) || 0,
     currency: (data.total && data.total.currency) || (data.amounts && data.amounts.total && data.amounts.total.currency) || 'SAR',
     shipping_cost: parseFloat(data.shipping_cost) || parseFloat(data.amounts && data.amounts.shipping_cost && data.amounts.shipping_cost.amount) || 0,
     order_status: (data.status && data.status.name) || data.status || null,
+    status_slug: (data.status && data.status.slug) || null,
     payment_status: data.payment_method || (data.payment && data.payment.status) || null,
     payment_method: data.payment_method || null,
+    order_date: (data.date && data.date.date) || null,
+    source: data.source || null,
     items_count: items.length,
-    product_names: productNames
+    product_names: productNames,
+    items: items.map(it => ({
+      product_id: it.product && it.product.id ? String(it.product.id) : (it.product_id ? String(it.product_id) : null),
+      sku_id: it.product_sku_id ? String(it.product_sku_id) : null,
+      name: it.name || it.product_name || null,
+      quantity: it.quantity || 1,
+      total: amountOf(it.amounts && it.amounts.total)
+    }))
   };
 }
 
@@ -423,9 +433,6 @@ async function logSallaOrder(storeId, eventType, payload) {
       salla_order_id: orderData.salla_order_id,
       salla_order_reference: orderData.salla_order_reference,
       customer_id: orderData.customer_id,
-      customer_email: orderData.customer_email,
-      customer_phone: orderData.customer_phone,
-      customer_name: orderData.customer_name,
       customer_city: orderData.customer_city,
       total_amount: orderData.total_amount,
       currency: orderData.currency,
@@ -438,7 +445,16 @@ async function logSallaOrder(storeId, eventType, payload) {
       session_id: attribution.session_id,
       attribution_method: attribution.method,
       attribution_confidence: attribution.confidence,
-      raw_payload: payload
+      // Minimal record instead of Salla's full payload, which carries the
+      // customer's contact details and birthday.
+      raw_payload: {
+        event: eventType,
+        merchant: payload && payload.merchant,
+        status_slug: orderData.status_slug,
+        order_date: orderData.order_date,
+        source: orderData.source,
+        items: orderData.items
+      }
     });
     if (!r.ok) console.error('Supabase orders insert failed:', r.status, JSON.stringify(r.data).slice(0, 200));
   } catch (err) {

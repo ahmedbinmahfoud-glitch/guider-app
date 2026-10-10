@@ -72,6 +72,8 @@ Saudi dialect strictly. No Egyptian or Levantine vocabulary. Prices VAT-inclusiv
 - `logConversation` was fire-and-forget (not awaited, HTTP status ignored), so Vercel froze the function before the insert finished and turns were silently lost. Fixed in the Block 0 PR (awaited + non-2xx logged).
 - `enforceSaudi()` not built yet.
 - Catalog hotfix 2026-10-08: the prompt's prices, notes and stock were refreshed from the team's store export (kilo discount ended; new beans added; discontinued: Rimasila, Coconut Lemonade beans). Bot product links now use `https://driponcoffeesa.com/ar/product/p<id>` (Salla redirects it to the product page); the old `/ar/?product_id=<id>` form opened the home page, so every bot product link was dead until this fix. Until the tools replace the hardcoded catalog, any price/stock change in the store needs the same manual refresh.
+- Personal data (decided 2026-10-10): `orders` stores the Salla customer id, products/quantities/amounts, dates, status and city only. Name, email, phone and birthday are not stored; a future consented outreach feature reads them from Salla at send time. `raw_payload` in `orders` is a minimal record, not Salla's payload. The `customer_email/phone/name` columns are now always null (drop them later with approval).
+- Drip On install day: follow `docs/runbooks/dripon-install.md`.
 - Product rules (milk suitability, grind, cross-sell, intent triggers) live in the prompt; must move to per-product `metadata` JSONB so one prompt serves all merchants.
 - A flat `SALLA_ACCESS_TOKEN` env var conflicts with per-store tokens in `stores`. Don't delete until Block 1 replaces its usage.
 
