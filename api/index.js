@@ -1369,11 +1369,16 @@ async function chatWithTools(storeId, messages) {
   const allowed = new Set();
   const texts = [];
   const convo = messages.map(m => m && m.role === 'assistant' ? { ...m, content: keepAllowedLinks(m.content, null) } : m);
-  // Products named in the customer's message or the bot's previous reply are
-  // looked up before Claude answers, so facts about them come from the
+  // Products named in the conversation (newest first, up to 4) are looked up
+  // before Claude answers, so facts about them come from the
   // catalog even when Claude would not call the tool on its own.
-  const recent = convo.slice(-2).map(m => typeof m.content === 'string' ? m.content : '').join('\n');
-  const named = await catalog.mentioned(storeId, recent);
+  const named = [];
+  for (const m of [...convo].reverse()) {
+    if (named.length >= 4) break;
+    for (const n of await catalog.mentioned(storeId, typeof m.content === 'string' ? m.content : '')) {
+      if (!named.includes(n) && named.length < 4) named.push(n);
+    }
+  }
   if (named.length && convo.length && convo[convo.length - 1].role === 'user') {
     const out = await catalog.lookup(storeId, named);
     collectUrls(out, allowed);
