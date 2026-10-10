@@ -1310,8 +1310,9 @@ ${BAR}
 - لا ترشّح منتج available=false. لو الزبون سأله بالاسم: قل إنه غير متوفر حالياً، وابحث عن بديل بنفس النكهات أو الأسلوب، أو ظرفه لو متوفر.
 - لا تخترع نكهات أو مكونات باكج أو معلومات غير اللي في نتائج الأداة.
 - للحليب: رشّح فقط المنتجات اللي milk=true.
-- المعالجة والنكهات والمنشأ والحموضة: اذكرها فقط كما رجعت من الأداة. لو المعلومة مو موجودة، لا تخمّنها.
-- لو المنتج غير متوفر: اعرض البديل المتوفر **في نفس الرد** بسعره، لا تسأل "تبغى بديل؟".
+- أي معلومة عن منتج (نكهات، معالجة، منشأ، حموضة، سعر، توفر) — **حتى لو ذكرته قبل في المحادثة** — تحقق منها بالأداة قبل ما تكتبها. لو المعلومة مو موجودة في النتيجة، لا تخمّنها.
+- اتبع المسارات وأسئلتها تحت كما هي. الأداة ما تضيف أسئلة: "مع الحليب" بدون تفاصيل → رشّح مباشرة أفضل منتج milk=true.
+- لو المنتج غير متوفر أو مو موجود: اعرض البديل المتوفر **في نفس الرد** باسمه ورابطه وسعره، لا تسأل "تبغى بديل؟". مثال: "ظرف فيمتو غير متوفر حالياً. الأقرب له [عنب لاهوائي](رابط) — توت أسود وبرقوق" ثم السعر.
 - لا تكتب أي نص قبل استخدام الأداة. ابحث أولاً ثم اكتب ردك كامل.
 - الروابط داخل نص الرد فقط، **ممنوع داخل CHOICES**.
 - الأظرف تُباع بالراحة، لا تذكر سعرها في الاقتراح إلا لو سأل.
@@ -1381,7 +1382,9 @@ async function chatWithTools(storeId, messages) {
     logUsage(response.usage, { round, stop: response.stop_reason });
     const text = textOf(response);
     if (text) texts.push(text);
-    if (response.stop_reason !== 'tool_use' || last) return finishToolReply(texts.join('\n\n'), allowed);
+    // The final answer stands alone; text written before a tool call is used
+    // only if the final round wrote nothing.
+    if (response.stop_reason !== 'tool_use' || last) return finishToolReply(text || texts.join('\n\n'), allowed);
     convo.push({ role: 'assistant', content: response.content });
     const results = await Promise.all(response.content.filter(b => b.type === 'tool_use').map(async b => {
       let out;
