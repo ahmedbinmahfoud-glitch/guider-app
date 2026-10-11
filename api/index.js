@@ -534,12 +534,14 @@ async function handleStoreAuthorize(payload) {
   if (r.ok) await syncStoreProducts(storeId);
 }
 
-// Salla access tokens live 14 days. Vercel cron calls this daily; any token
-// expiring within 3 days is refreshed with the client credentials of the app
+// Salla access tokens live 14 days and Salla's review asks apps to refresh
+// them by day 10. Vercel cron calls this daily; any token expiring within 5
+// days (so at most 10 days old, given the daily run) is refreshed with the
+// client credentials of the app
 // the store installed. Refresh tokens are single-use, so a store refreshed in
 // the last 12 hours is skipped: an extra call to this public URL can't race a
 // refresh in progress or burn a token.
-const REFRESH_WINDOW_MS = 3 * 86400000;
+const REFRESH_WINDOW_MS = 5 * 86400000;
 const REFRESH_COOLDOWN_MS = 12 * 3600000;
 async function refreshExpiringTokens() {
   const horizon = new Date(Date.now() + REFRESH_WINDOW_MS).toISOString();
