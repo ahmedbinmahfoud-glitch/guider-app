@@ -1,7 +1,7 @@
 // Integration harness for api/index.js. Run via tests/integration/run.sh (self-signed cert for the fake Supabase is generated there).
 // Local test harness: fake Supabase (HTTPS), fake Anthropic, fake Salla store-info.
 const https = require('https'); const fs = require('fs'); const Module = require('module');
-const db = { stores: [], conversations: [], orders: [], salla_events: [], session_identities: [], products: [] };
+const db = { stores: [], conversations: [], orders: [], salla_events: [], session_identities: [], products: [], store_config: [] };
 const log = [];
 function match(row, q) {
   for (const [k, v] of q) {
@@ -193,6 +193,15 @@ srv.listen(8443, async () => {
   r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'assistant', content: 'أرشّحلك كايا' }, { role: 'user', content: 'وأكيا كيف طعمه؟' }], sessionId: 'session_regress_tools4' });
   const auto = calls[0].messages.at(-1).content[0];
   ok('tools: named products are looked up before answering', auto.type === 'tool_result' && JSON.parse(auto.content).results.map(x => x.name).sort().join() === ['أكيا', 'كايا'].sort().join());
+  // Prompt v8 from store_config
+  db.store_config.push({ store_id: 'dripon', persona: { name: 'سلمان', store_name: 'متجر تجربة', traits: ['خبير'] },
+    rules: { contacts: { support_whatsapp: 'https://wa.me/1' }, discounts: { active_codes: [] }, store_facts: ['الشحن مجاني'], playbook: 'قاعدة المتجر: لا تبيع للحليب إلا milk=true' } });
+  await new Promise(res => setTimeout(res, 0));
+  calls.length = 0;
+  global.fakeClaude = async (params) => { calls.push(params); return { usage: {}, stop_reason: 'end_turn', content: [{ type: 'text', text: 'تمام' }] }; };
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_regress_v8' });
+  const sys8 = calls[0] && calls[0].system[0].text;
+  ok('v8: store_config builds the prompt (persona, playbook, contacts, no-code policy)', sys8 && sys8.includes('أنت "سلمان"') && sys8.includes('قاعدة المتجر') && sys8.includes('https://wa.me/1') && sys8.includes('ما فيه كود فعّال') && !sys8.includes('دريب'));
   process.env.TOOLS_STORES = ''; global.fakeClaude = null;
   global.fakeClaude = async () => ({ usage: {}, stop_reason: 'end_turn', content: [{ type: 'text', text: 'مش متوفر دلوقتي، ليه كده؟ أقرب شي ليه البديل\nCHOICES: [عايز بديل]' }] });
   r = await call(h, 'POST', '/api/index', DRIP, { messages: msg, sessionId: 'session_regress_dialect' });
