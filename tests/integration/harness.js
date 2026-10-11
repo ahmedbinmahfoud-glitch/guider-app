@@ -202,6 +202,28 @@ srv.listen(8443, async () => {
   r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_regress_v8' });
   const sys8 = calls[0] && calls[0].system[0].text;
   ok('v8: store_config builds the prompt (persona, playbook, contacts, no-code policy)', sys8 && sys8.includes('أنت "سلمان"') && sys8.includes('قاعدة المتجر') && sys8.includes('https://wa.me/1') && sys8.includes('ما فيه كود فعّال') && !sys8.includes('دريب'));
+  // Block 3: customer memory
+  const ago = d => new Date(Date.now() - d * 86400000).toISOString();
+  db.session_identities.push({ store_id: 'dripon', session_id: 'session_mem_returning', customer_id: '501', last_seen: ago(0) },
+    { store_id: 'dripon', session_id: 'session_mem_newcust', customer_id: '502', last_seen: ago(0) });
+  db.orders.push(
+    { store_id: 'dripon', customer_id: '501', salla_order_id: 'o1', event_type: 'order.created', total_amount: 85, created_at: ago(40), raw_payload: { status_slug: 'payment_pending', items: [{ product_id: '10', name: 'أكيا 250', quantity: 2 }] } },
+    { store_id: 'dripon', customer_id: '501', salla_order_id: 'o1', event_type: 'order.status.updated', total_amount: 85, created_at: ago(39), raw_payload: { status_slug: 'completed', items: [{ product_id: '10', name: 'أكيا 250', quantity: 2 }] } },
+    { store_id: 'dripon', customer_id: '501', salla_order_id: 'o2', event_type: 'order.status.updated', total_amount: 62, created_at: ago(5), raw_payload: { status_slug: 'canceled', items: [{ product_id: '12', name: 'كايا 250', quantity: 1 }] } });
+  calls.length = 0;
+  global.fakeClaude = async (params) => { calls.push(params); return { usage: {}, stop_reason: 'end_turn', content: [{ type: 'text', text: 'هلا' }] }; };
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_mem_returning' });
+  const memText = calls[0].system[1] && calls[0].system[1].text;
+  ok('memory: returning customer summarised (cancelled order dropped)', memText && memText.includes('زبون راجع') && memText.includes('أكيا 250') && memText.includes('طلب واحد سابق') && !memText.includes('كايا'));
+  ok('memory: cached prompt block stays first, memory block uncached', calls[0].system[0].cache_control && !calls[0].system[1].cache_control);
+  const memLookup = calls[0].messages.at(-1).content[0];
+  ok('memory: past product looked up for current price/stock', memLookup.type === 'tool_result' && JSON.parse(memLookup.content).results.some(x => x.name === 'أكيا'));
+  calls.length = 0;
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_mem_newcust' });
+  ok('memory: logged-in customer without orders marked new', calls[0].system[1].text.includes('ما عنده طلبات سابقة'));
+  calls.length = 0;
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_mem_guest' });
+  ok('memory: guest gets no memory block', calls[0].system.length === 1);
   process.env.TOOLS_STORES = ''; global.fakeClaude = null;
   global.fakeClaude = async () => ({ usage: {}, stop_reason: 'end_turn', content: [{ type: 'text', text: 'مش متوفر دلوقتي، ليه كده؟ أقرب شي ليه البديل\nCHOICES: [عايز بديل]' }] });
   r = await call(h, 'POST', '/api/index', DRIP, { messages: msg, sessionId: 'session_regress_dialect' });
