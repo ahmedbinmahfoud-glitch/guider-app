@@ -188,6 +188,21 @@ function stripStoreLinks(text) {
 // production until a store passes the regression set; set on Preview to test.
 const { createCatalog, collectUrls, keepAllowedLinks } = require('../lib/catalog');
 const { enforceSaudi } = require('../lib/dialect');
+const { buildPromptV8 } = require('../lib/prompt');
+
+// Prompt v8: a store with a store_config row gets the generic prompt filled
+// from that row; others in tool mode fall back to prompt v7 minus its catalog.
+const promptCache = new Map(); // storeId -> { at, prompt }
+async function toolPromptFor(storeId) {
+  const hit = promptCache.get(storeId);
+  if (hit && Date.now() - hit.at < 60 * 1000) return hit.prompt;
+  const r = await sb('GET', `/store_config?select=persona,rules&store_id=eq.${encodeURIComponent(storeId)}`);
+  if (!r.ok) console.error('store_config load failed:', r.status);
+  if (!(r.ok && Array.isArray(r.data) && r.data[0])) return hit ? hit.prompt : TOOL_SYSTEM_PROMPT;
+  const prompt = buildPromptV8(r.data[0]);
+  promptCache.set(storeId, { at: Date.now(), prompt });
+  return prompt;
+}
 const catalog = createCatalog((...a) => sb(...a));
 function toolsEnabled(storeId) {
   return (process.env.TOOLS_STORES || '').split(',').map(x => x.trim()).filter(Boolean).includes(String(storeId));
@@ -1371,6 +1386,7 @@ const MAX_TOOL_ROUNDS = 4;
 async function chatWithTools(storeId, messages) {
   const allowed = new Set();
   const texts = [];
+  const systemPrompt = await toolPromptFor(storeId);
   const convo = messages.map(m => m && m.role === 'assistant' ? { ...m, content: keepAllowedLinks(m.content, null) } : m);
   // Products named in the conversation (newest first, up to 4) are looked up
   // before Claude answers, so facts about them come from the
@@ -1393,7 +1409,7 @@ async function chatWithTools(storeId, messages) {
     const response = await anthropic.messages.create({
       model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-6',
       max_tokens: 1200,
-      system: [{ type: 'text', text: TOOL_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
+      system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
       tools: catalog.TOOLS,
       ...(last ? { tool_choice: { type: 'none' } } : {}),
       messages: convo
