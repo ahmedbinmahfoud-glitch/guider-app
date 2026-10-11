@@ -189,6 +189,8 @@ function stripStoreLinks(text) {
 const { createCatalog, collectUrls, keepAllowedLinks } = require('../lib/catalog');
 const { enforceSaudi } = require('../lib/dialect');
 const { buildPromptV8 } = require('../lib/prompt');
+const { createMemory } = require('../lib/memory');
+const memory = createMemory((...a) => sb(...a));
 
 // Prompt v8: a store with a store_config row gets the generic prompt filled
 // from that row; others in tool mode fall back to prompt v7 minus its catalog.
@@ -1383,7 +1385,7 @@ function finishToolReply(text, allowed) {
 // Tool mode: Claude calls search_products (up to 4 rounds), then answers.
 // Only product URLs returned by the tool survive in the reply.
 const MAX_TOOL_ROUNDS = 4;
-async function chatWithTools(storeId, messages) {
+async function chatWithTools(storeId, messages, sessionId) {
   const allowed = new Set();
   const texts = [];
   const systemPrompt = await toolPromptFor(storeId);
@@ -1391,11 +1393,25 @@ async function chatWithTools(storeId, messages) {
   // Products named in the conversation (newest first, up to 4) are looked up
   // before Claude answers, so facts about them come from the
   // catalog even when Claude would not call the tool on its own.
+  // Block 3: a logged-in shopper's purchase history goes in a second,
+  // uncached system block; their past products are looked up below so a
+  // reorder suggestion uses current price and stock.
+  let mem = null;
+  try { mem = await memory.forSession(storeId, sessionId); } catch (err) { console.error('memory failed:', err.message); }
+  const system = [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }];
+  if (mem) system.push({ type: 'text', text: mem.prompt });
   const named = [];
   for (const m of [...convo].reverse()) {
     if (named.length >= 4) break;
     for (const n of await catalog.mentioned(storeId, typeof m.content === 'string' ? m.content : '')) {
       if (!named.includes(n) && named.length < 4) named.push(n);
+    }
+  }
+  if (mem && mem.summary) {
+    for (const p of mem.summary.products.slice(0, 2)) {
+      for (const n of await catalog.mentioned(storeId, p.name || '')) {
+        if (!named.includes(n) && named.length < 5) named.push(n);
+      }
     }
   }
   if (named.length && convo.length && convo[convo.length - 1].role === 'user') {
@@ -1409,7 +1425,7 @@ async function chatWithTools(storeId, messages) {
     const response = await anthropic.messages.create({
       model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-6',
       max_tokens: 1200,
-      system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
+      system,
       tools: catalog.TOOLS,
       ...(last ? { tool_choice: { type: 'none' } } : {}),
       messages: convo
@@ -1622,7 +1638,7 @@ module.exports = async (req, res) => {
       }
 
       const draft = toolsEnabled(storeId)
-        ? await chatWithTools(storeId, messages)
+        ? await chatWithTools(storeId, messages, sessionId)
         : await chatWithPromptCatalog(messages);
       // Deterministic dialect pass; every replacement is logged so the
       // violation rate can be tracked.
