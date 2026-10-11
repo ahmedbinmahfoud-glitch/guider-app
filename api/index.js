@@ -187,6 +187,7 @@ function stripStoreLinks(text) {
 // search_products instead of the hardcoded prompt catalog. Unset in
 // production until a store passes the regression set; set on Preview to test.
 const { createCatalog, collectUrls, keepAllowedLinks } = require('../lib/catalog');
+const { enforceSaudi } = require('../lib/dialect');
 const catalog = createCatalog((...a) => sb(...a));
 function toolsEnabled(storeId) {
   return (process.env.TOOLS_STORES || '').split(',').map(x => x.trim()).filter(Boolean).includes(String(storeId));
@@ -1602,9 +1603,13 @@ module.exports = async (req, res) => {
         return res.json({ reply: 'خذ نفس بسيط وجرب بعد شوي 🙂' });
       }
 
-      const reply = toolsEnabled(storeId)
+      const draft = toolsEnabled(storeId)
         ? await chatWithTools(storeId, messages)
         : await chatWithPromptCatalog(messages);
+      // Deterministic dialect pass; every replacement is logged so the
+      // violation rate can be tracked.
+      const { text: reply, changes: dialectFixes } = enforceSaudi(draft);
+      if (dialectFixes.length) console.log('DIALECT', JSON.stringify({ storeId, fixes: dialectFixes }));
 
       const updatedMessages = [...messages, { role: 'assistant', content: reply }];
       const { recommendation, reached } = detectRecommendation(updatedMessages);

@@ -192,6 +192,10 @@ srv.listen(8443, async () => {
   const auto = calls[0].messages.at(-1).content[0];
   ok('tools: named products are looked up before answering', auto.type === 'tool_result' && JSON.parse(auto.content).results.map(x => x.name).sort().join() === ['أكيا', 'كايا'].sort().join());
   process.env.TOOLS_STORES = ''; global.fakeClaude = null;
+  global.fakeClaude = async () => ({ usage: {}, stop_reason: 'end_turn', content: [{ type: 'text', text: 'مش متوفر دلوقتي، ليه كده؟ أقرب شي ليه البديل\nCHOICES: [عايز بديل]' }] });
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: msg, sessionId: 'session_regress_dialect' });
+  ok('enforceSaudi fixes Egyptian words, keeps Hijazi "ليه" (to it), first person in CHOICES', r.body.reply === 'مو متوفر الحين، ليش كذا؟ أقرب شي ليه البديل\nCHOICES: [أبغى بديل]');
+  global.fakeClaude = null;
   r = await call(h, 'POST', '/api/index', DRIP, { messages: msg, sessionId: 'session_regress_tools3' });
   ok('tools off: prompt-catalog mode unchanged', r.status === 200 && r.body.reply.includes('حراز'));
   srv.close();
