@@ -125,9 +125,11 @@ srv.listen(8443, async () => {
   db.stores.push(
     { salla_store_id: 'A', salla_app: 'private', is_active: true, refresh_token: 'RT_OK', expires_at: soon, updated_at: old },
     { salla_store_id: 'B', salla_app: 'private', is_active: true, refresh_token: 'RT_OK', expires_at: new Date(Date.now() + 10 * 86400000).toISOString(), updated_at: old },
-    { salla_store_id: 'C', salla_app: 'private', is_active: true, refresh_token: 'RT_OK', expires_at: soon, updated_at: new Date().toISOString() });
+    { salla_store_id: 'C', salla_app: 'private', is_active: true, refresh_token: 'RT_OK', expires_at: soon, updated_at: new Date().toISOString() },
+    { salla_store_id: 'E', salla_app: 'private', is_active: true, refresh_token: 'RT_OK', expires_at: new Date(Date.now() + 4.5 * 86400000).toISOString(), updated_at: old });
   r = await call(h, 'GET', '/api/cron/refresh-tokens', {}, undefined);
   const A = db.stores.find(s => s.salla_store_id === 'A'), B = db.stores.find(s => s.salla_store_id === 'B'), C = db.stores.find(s => s.salla_store_id === 'C');
+  ok('refresh: 9.5-day-old token refreshed (Salla: by day 10)', db.stores.find(x => x.salla_store_id === 'E').access_token === 'AT_NEW');
   ok('refresh: expiring store refreshed with private creds', r.status === 200 && A.access_token === 'AT_NEW' && A.refresh_token === 'RT_NEW' && global.lastRefreshForm.includes('client_id=priv-id'));
   ok('refresh: far-from-expiry store untouched', B.access_token === undefined);
   ok('refresh: recently refreshed store skipped (cooldown)', C.access_token === undefined && r.body.skipped === 1);
