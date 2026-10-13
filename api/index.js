@@ -1385,7 +1385,7 @@ function finishToolReply(text, allowed) {
 // Tool mode: Claude calls search_products (up to 4 rounds), then answers.
 // Only product URLs returned by the tool survive in the reply.
 const MAX_TOOL_ROUNDS = 4;
-async function chatWithTools(storeId, messages, sessionId) {
+async function chatWithTools(storeId, messages, sessionId, firstName) {
   const allowed = new Set();
   const texts = [];
   const systemPrompt = await toolPromptFor(storeId);
@@ -1397,7 +1397,7 @@ async function chatWithTools(storeId, messages, sessionId) {
   // uncached system block; their past products are looked up below so a
   // reorder suggestion uses current price and stock.
   let mem = null;
-  try { mem = await memory.forSession(storeId, sessionId); } catch (err) { console.error('memory failed:', err.message); }
+  try { mem = await memory.forSession(storeId, sessionId, firstName); } catch (err) { console.error('memory failed:', err.message); }
   const system = [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }];
   if (mem) system.push({ type: 'text', text: mem.prompt });
   const named = [];
@@ -1627,7 +1627,7 @@ module.exports = async (req, res) => {
     try {
       if (!storeId) return res.status(403).json({ error: 'Forbidden origin' });
 
-      const { messages, sessionId } = req.body;
+      const { messages, sessionId, firstName } = req.body;
       if (!messages || !Array.isArray(messages)) {
         return res.status(400).json({ error: 'messages array required' });
       }
@@ -1638,7 +1638,7 @@ module.exports = async (req, res) => {
       }
 
       const draft = toolsEnabled(storeId)
-        ? await chatWithTools(storeId, messages, sessionId)
+        ? await chatWithTools(storeId, messages, sessionId, firstName)
         : await chatWithPromptCatalog(messages);
       // Deterministic dialect pass; every replacement is logged so the
       // violation rate can be tracked.
