@@ -190,7 +190,7 @@ const { createCatalog, collectUrls, keepAllowedLinks } = require('../lib/catalog
 const { enforceSaudi } = require('../lib/dialect');
 const { buildPromptV8 } = require('../lib/prompt');
 const { createMemory } = require('../lib/memory');
-const memory = createMemory((...a) => sb(...a));
+const memory = createMemory((...a) => sb(...a), { backfill: (...a) => backfillCustomerOrders(...a) });
 
 // Prompt v8: a store with a store_config row gets the generic prompt filled
 // from that row; others in tool mode fall back to prompt v7 minus its catalog.
@@ -493,6 +493,58 @@ async function logSallaOrder(storeId, eventType, payload) {
   } catch (err) {
     console.error('logSallaOrder failed:', err.message);
   }
+}
+
+// Memory backfill: orders placed before the app was installed never came
+// through a webhook. The first time a logged-in customer with no stored
+// orders chats, their orders are read from Salla once (one API call) and
+// stored like webhook orders, minus attribution. A `memory.backfill` row in
+// salla_events marks the customer as done (also when nothing was found), so
+// the API budget (10K calls/month per store) is spent once per customer.
+const BACKFILL_EVENT = 'memory.backfill';
+async function backfillCustomerOrders(storeId, customerId) {
+  const s = encodeURIComponent(storeId), c = String(customerId);
+  if (!/^\d{1,20}$/.test(c)) return false;
+  const done = await sb('GET', `/salla_events?select=id&store_id=eq.${s}&event_type=eq.${BACKFILL_EVENT}` +
+    `&raw_payload->>customer_id=eq.${c}&limit=1`);
+  if (!done.ok || !Array.isArray(done.data) || done.data.length) return false;
+  const token = await storeToken(storeId);
+  if (!token) return false;
+  const res = await httpsGet('api.salla.dev', `/admin/v2/orders?customer_id=${c}&per_page=50`, {
+    'Authorization': `Bearer ${token}`, 'Accept': 'application/json', 'Accept-Language': 'ar'
+  }).catch(err => ({ error: err.message }));
+  const list = res && Array.isArray(res.data) ? res.data : null;
+  // Only orders that name this customer are kept, in case the filter is
+  // ignored. Field names (not values) are recorded to check the list shape.
+  const mine = list ? list.filter(o => o && o.customer && String(o.customer.id) === c) : [];
+  const existing = await sb('GET', `/orders?select=salla_order_id&store_id=eq.${s}&customer_id=eq.${c}`);
+  const seen = new Set(existing.ok && Array.isArray(existing.data) ? existing.data.map(r => String(r.salla_order_id)) : []);
+  let stored = 0;
+  for (const o of mine) {
+    const d = extractOrderData({ data: o });
+    if (!d.salla_order_id || seen.has(d.salla_order_id)) continue;
+    const r = await sb('POST', '/orders', {
+      store_id: storeId, event_type: 'backfill', event_timestamp: new Date().toISOString(),
+      salla_order_id: d.salla_order_id, salla_order_reference: d.salla_order_reference,
+      customer_id: c, customer_city: d.customer_city, total_amount: d.total_amount, currency: d.currency,
+      shipping_cost: d.shipping_cost, order_status: d.order_status, payment_status: d.payment_status,
+      payment_method: d.payment_method, items_count: d.items_count, product_names: d.product_names,
+      session_id: null, attribution_method: 'backfill', attribution_confidence: 'none',
+      raw_payload: { event: 'backfill', status_slug: d.status_slug, order_date: d.order_date, source: d.source, items: d.items }
+    }, 'return=minimal');
+    if (r.ok) stored++; else console.error('backfill insert failed:', r.status);
+  }
+  await sb('POST', '/salla_events', {
+    store_id: storeId, event_type: BACKFILL_EVENT,
+    raw_payload: {
+      customer_id: c, ok: !!list, listed: list ? list.length : null, matched: mine.length, stored,
+      error: list ? null : String((res && (res.error && (res.error.message || res.error))) || (res && res.status) || 'no data').slice(0, 120),
+      order_keys: list && list[0] ? Object.keys(list[0]) : null,
+      item_keys: list && list[0] && Array.isArray(list[0].items) && list[0].items[0] ? Object.keys(list[0].items[0]) : null
+    }
+  }, 'return=minimal');
+  console.log('BACKFILL', JSON.stringify({ storeId, listed: list ? list.length : null, matched: mine.length, stored }));
+  return stored > 0;
 }
 
 // Non-order events keep only the event name and the entity id. Product and

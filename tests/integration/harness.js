@@ -7,7 +7,8 @@ function match(row, q) {
   for (const [k, v] of q) {
     if (['select','order','limit','on_conflict'].includes(k)) continue;
     const [op, val] = [v.slice(0, v.indexOf('.')), v.slice(v.indexOf('.') + 1)];
-    if (op === 'eq' && String(row[k]) !== val) return false;
+    const cell = k.includes('->>') ? ((row[k.split('->>')[0]] || {})[k.split('->>')[1]]) : row[k];
+    if (op === 'eq' && String(cell) !== val) return false;
     if (op === 'gte' && !(row[k] >= val)) return false;
     if (op === 'lt' && !(row[k] < val)) return false;
     if (op === 'is' && val === 'null' && !(row[k] === null || row[k] === undefined)) return false;
@@ -37,7 +38,10 @@ const realReq = https.request;
 https.request = function(opts, cb) {
   if (opts.hostname === 'api.salla.dev') {
     const { PassThrough } = require('stream'); const r = new PassThrough(); r.statusCode = 200;
-    const body = opts.path.startsWith('/admin/v2/products')
+    if (opts.path.startsWith('/admin/v2/orders')) global.sallaOrderCalls = (global.sallaOrderCalls || 0) + 1;
+    const body = opts.path.startsWith('/admin/v2/orders')
+      ? (global.fakeOrders ? global.fakeOrders(opts.path) : { data: [] })
+      : opts.path.startsWith('/admin/v2/products')
       ? (global.fakeProducts ? global.fakeProducts(opts.path) : { data: [], pagination: { totalPages: 1 } })
       : { data: { id: 999, name: 'Demo', domain: 'https://demostore.salla.sa/dev-abc' } };
     setImmediate(() => { cb(r); r.end(JSON.stringify(body)); });
@@ -229,6 +233,22 @@ srv.listen(8443, async () => {
   calls.length = 0;
   r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_mem_guest', firstName: 'سارة' });
   ok('memory: guest gets no memory block (name ignored)', calls[0].system.length === 1);
+  // Backfill: a logged-in customer with no stored orders gets their pre-install
+  // orders from Salla once; other customers' orders in the list are ignored.
+  db.stores.push({ salla_store_id: 'dripon', is_active: true, access_token: 'AT_DRIP' });
+  db.session_identities.push({ store_id: 'dripon', session_id: 'session_mem_backfill', customer_id: '503', last_seen: ago(0) });
+  global.fakeOrders = () => ({ data: [
+    { id: 9001, reference_id: 11, customer: { id: 503 }, status: { slug: 'completed', name: 'تم التنفيذ' }, date: { date: ago(60) }, total: { amount: 85, currency: 'SAR' }, items: [{ name: 'أكيا 250', quantity: 2 }] },
+    { id: 9002, reference_id: 12, customer: { id: 777 }, status: { slug: 'completed' }, items: [{ name: 'كايا 250', quantity: 1 }] }
+  ] });
+  global.sallaOrderCalls = 0; calls.length = 0;
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_mem_backfill' });
+  ok('backfill: pre-install order fetched once and used by memory', global.sallaOrderCalls === 1 && calls[0].system[1].text.includes('زبون راجع') && calls[0].system[1].text.includes('أكيا 250'));
+  ok('backfill: only this customer stored, no attribution', db.orders.filter(o => o.event_type === 'backfill').length === 1 && db.orders.find(o => o.salla_order_id === '9001').attribution_method === 'backfill' && !db.orders.some(o => o.salla_order_id === '9002'));
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_mem_newcust' });
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_mem_newcust' });
+  ok('backfill: customer with no orders checked once, then marked', global.sallaOrderCalls === 2 && db.salla_events.filter(e => e.event_type === 'memory.backfill').length === 2);
+  global.fakeOrders = null;
   const row = db.conversations.at(-1);
   ok('turn usage + latency stored with the conversation', row.usage && row.usage.mode === 'tools' && row.usage.rounds === 1 && typeof row.latency_ms === 'number' && 'cost_usd' in row.usage && !('started' in row.usage));
   process.env.TOOLS_STORES = ''; global.fakeClaude = null;
