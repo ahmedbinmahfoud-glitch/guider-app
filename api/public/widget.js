@@ -474,16 +474,60 @@
       const res = await fetch(`${API}/api/index`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages, sessionId, firstName })
+        body: JSON.stringify({ messages, sessionId, firstName, stream: true })
       });
-      const data = await res.json();
+      const type = res.headers.get('content-type') || '';
+      let reply;
+      if (type.indexOf('ndjson') !== -1 && res.body && res.body.getReader) {
+        reply = await readStream(res, typing);
+      } else {
+        reply = (await res.json()).reply;
+      }
+      if (!reply) throw new Error('no reply');
       typing.remove();
-      addMessage(data.reply, 'assistant');
-      messages.push({ role: 'assistant', content: data.reply });
+      addMessage(reply, 'assistant');
+      messages.push({ role: 'assistant', content: reply });
     } catch(e) {
       typing.remove();
-      addMessage('حدث خطأ، حاول مرة ثانية', 'assistant');
+      const live = messagesEl.querySelector('.guider-msg-ai.guider-live');
+      if (live) live.remove();
+      addMessage('صار خطأ، جرب مرة ثانية', 'assistant');
     }
+  }
+
+  // Streamed reply: lines appear as the bot writes them; the final reply
+  // (with its buttons) replaces them when it arrives.
+  async function readStream(res, typing) {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '', lines = [], live = null, reply = null;
+    function show() {
+      if (!live) {
+        typing.remove();
+        live = document.createElement('div');
+        live.className = 'guider-msg-ai guider-live';
+        messagesEl.appendChild(live);
+      }
+      live.innerHTML = renderMarkdown(lines.join('\n'));
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n')) !== -1) {
+        const raw = buf.slice(0, i); buf = buf.slice(i + 1);
+        if (!raw.trim()) continue;
+        let ev; try { ev = JSON.parse(raw); } catch (e) { continue; }
+        if (ev.t === 'line') { lines.push(ev.text); show(); }
+        else if (ev.t === 'reset') { lines = []; if (live) live.innerHTML = ''; }
+        else if (ev.t === 'done') reply = ev.reply;
+      }
+      if (reply) break;
+    }
+    if (live) live.remove();
+    return reply;
   }
 
   function openWidget() {

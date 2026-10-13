@@ -1442,6 +1442,38 @@ function logUsage(u, extra, m) {
   }
 }
 
+// Streamed Claude call: text deltas go to onText as they arrive.
+async function timedStream(params, m, onText) {
+  const t = Date.now();
+  try {
+    const stream = anthropic.messages.stream(params);
+    stream.on('text', onText);
+    return await stream.finalMessage();
+  } finally { if (m) m.claude_ms += Date.now() - t; }
+}
+
+// Sends completed lines of a reply to the widget while Claude writes. Each
+// line gets the same link and dialect filtering as the final reply; nothing
+// from "CHOICES:" on is sent (the final reply carries the buttons). If the
+// round turns into a tool call, the widget is told to clear what it showed.
+function lineStreamer(emit, allowed) {
+  let buf = '', sent = 0, stopped = false;
+  function flush(line) {
+    if (stopped) return;
+    if (line.includes('CHOICES:')) { stopped = true; return; }
+    emit({ t: 'line', text: enforceSaudi(keepAllowedLinks(line, allowed)).text });
+    sent++;
+  }
+  return {
+    push(delta) {
+      buf += delta;
+      let i;
+      while ((i = buf.indexOf('\n')) !== -1) { flush(buf.slice(0, i)); buf = buf.slice(i + 1); }
+    },
+    reset() { if (sent) emit({ t: 'reset' }); buf = ''; sent = 0; stopped = false; }
+  };
+}
+
 // Times one Claude call into m.claude_ms.
 async function timedCreate(params, m) {
   const t = Date.now();
@@ -1478,10 +1510,10 @@ function finishToolReply(text, allowed) {
 // Tool mode: Claude calls search_products (up to 4 rounds), then answers.
 // Only product URLs returned by the tool survive in the reply.
 const MAX_TOOL_ROUNDS = 4;
-async function chatWithTools(storeId, messages, sessionId, firstName, m) {
+async function chatWithTools(storeId, messages, sessionId, firstName, m, emit) {
   const allowed = new Set();
   const texts = [];
-  const systemPrompt = await toolPromptFor(storeId);
+
   const convo = messages.map(m => m && m.role === 'assistant' ? { ...m, content: keepAllowedLinks(m.content, null) } : m);
   // Products named in the conversation (newest first, up to 4) are looked up
   // before Claude answers, so facts about them come from the
@@ -1489,8 +1521,12 @@ async function chatWithTools(storeId, messages, sessionId, firstName, m) {
   // Block 3: a logged-in shopper's purchase history goes in a second,
   // uncached system block; their past products are looked up below so a
   // reorder suggestion uses current price and stock.
-  let mem = null;
-  try { mem = await memory.forSession(storeId, sessionId, firstName); } catch (err) { console.error('memory failed:', err.message); }
+  // Independent lookups run together: the database is far from the function.
+  const [systemPrompt, mem] = await Promise.all([
+    toolPromptFor(storeId),
+    memory.forSession(storeId, sessionId, firstName).catch(err => { console.error('memory failed:', err.message); return null; }),
+    catalog.load(storeId).catch(() => null)
+  ]);
   const system = [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }];
   if (mem) system.push({ type: 'text', text: mem.prompt });
   const named = [];
@@ -1516,20 +1552,25 @@ async function chatWithTools(storeId, messages, sessionId, firstName, m) {
   if (m) m.prep_ms = Date.now() - m.started;
   for (let round = 0; ; round++) {
     const last = round >= MAX_TOOL_ROUNDS;
-    const response = await timedCreate({
+    const params = {
       model: MODEL,
       max_tokens: 1200,
       system,
       tools: catalog.TOOLS,
       ...(last ? { tool_choice: { type: 'none' } } : {}),
       messages: convo
-    }, m);
+    };
+    const streamer = emit ? lineStreamer(emit, allowed) : null;
+    const response = streamer
+      ? await timedStream(params, m, d => streamer.push(d))
+      : await timedCreate(params, m);
     logUsage(response.usage, { round, stop: response.stop_reason }, m);
     const text = textOf(response);
     if (text) texts.push(text);
     // The final answer stands alone; text written before a tool call is used
     // only if the final round wrote nothing.
     if (response.stop_reason !== 'tool_use' || last) return finishToolReply(text || texts.join('\n\n'), allowed);
+    if (streamer) streamer.reset();
     convo.push({ role: 'assistant', content: response.content });
     const toolStart = Date.now();
     const results = await Promise.all(response.content.filter(b => b.type === 'tool_use').map(async b => {
@@ -1735,8 +1776,23 @@ module.exports = async (req, res) => {
 
       const tools = toolsEnabled(storeId);
       const metrics = newMetrics(tools ? 'tools' : 'prompt');
+      // Streaming (tool mode): newline-delimited JSON events — {t:'line'}
+      // while Claude writes, {t:'reset'} if a round became a tool call, then
+      // {t:'done', reply} with the final, fully filtered reply.
+      const streaming = tools && req.body.stream === true;
+      let emit = null;
+      if (streaming) {
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache, no-transform');
+        res.setHeader('X-Accel-Buffering', 'no');
+        emit = ev => {
+          if (ev.t === 'line' && !metrics.first_line_ms) metrics.first_line_ms = Date.now() - metrics.started;
+          res.write(JSON.stringify(ev) + '\n');
+        };
+      }
       const draft = tools
-        ? await chatWithTools(storeId, messages, sessionId, firstName, metrics)
+        ? await chatWithTools(storeId, messages, sessionId, firstName, metrics, emit)
         : await chatWithPromptCatalog(messages, metrics);
       // Deterministic dialect pass; every replacement is logged so the
       // violation rate can be tracked.
@@ -1751,14 +1807,20 @@ module.exports = async (req, res) => {
       const latencyMs = Date.now() - started;
       console.log('TURN', JSON.stringify({ storeId, latency_ms: latencyMs, ...usage }));
 
+      // The final reply goes out before logging, so the shopper doesn't wait
+      // for the database; the connection closes once the row is written.
+      if (streaming) emit({ t: 'done', reply });
+
       // Regression replays (scripts/regression.js) are never logged.
       if (sessionId && !String(sessionId).startsWith('session_regress_')) {
         await logConversation(storeId, sessionId, updatedMessages, recommendation, reached, dropOff, usage, latencyMs);
       }
 
+      if (streaming) return res.end();
       return res.json({ reply });
     } catch (err) {
       console.error('Chat error:', err);
+      if (res.headersSent) { res.write(JSON.stringify({ t: 'error' }) + '\n'); return res.end(); }
       return res.status(500).json({ error: err.message });
     }
   }

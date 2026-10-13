@@ -62,13 +62,28 @@ https.request = function(opts, cb) {
 const origResolve = Module._resolveFilename;
 Module._resolveFilename = function(r, ...a) { return r === '@anthropic-ai/sdk' ? '/fake-anthropic' : origResolve.call(this, r, ...a); };
 require.cache['/fake-anthropic'] = { id: '/fake-anthropic', filename: '/fake-anthropic', loaded: true,
-  exports: class { constructor() { this.messages = { create: async (params) => global.fakeClaude ? global.fakeClaude(params) : ({ usage: {}, content: [{ type: 'text', text: 'هلا! جرب حراز' }] }) }; } } };
+  exports: class { constructor() {
+    const create = async (params) => global.fakeClaude ? global.fakeClaude(params) : ({ usage: {}, content: [{ type: 'text', text: 'هلا! جرب حراز' }] });
+    // stream(): emits the text in small chunks, like the SDK's MessageStream.
+    const stream = (params) => {
+      const handlers = [];
+      return { on(ev, cb) { if (ev === 'text') handlers.push(cb); return this; },
+        async finalMessage() {
+          const msg = await create(params);
+          for (const b of msg.content) if (b.type === 'text') for (let i = 0; i < b.text.length; i += 7) handlers.forEach(h => h(b.text.slice(i, i + 7)));
+          return msg;
+        } };
+    };
+    this.messages = { create, stream };
+  } } };
 
 function call(handler, method, url, headers, body) {
   return new Promise((resolve) => {
     const res = { statusCode: 200, headers: {}, setHeader(k, v) { this.headers[k.toLowerCase()] = v; },
       status(c) { this.statusCode = c; return this; }, json(o) { resolve({ status: this.statusCode, body: o, headers: this.headers }); },
-      send(o) { resolve({ status: this.statusCode, body: o }); }, end() { resolve({ status: this.statusCode, headers: this.headers }); }, redirect() {} };
+      send(o) { resolve({ status: this.statusCode, body: o }); }, redirect() {},
+      written: '', headersSent: false, write(d) { this.headersSent = true; this.written += d; },
+      end() { resolve({ status: this.statusCode, headers: this.headers, events: this.written ? this.written.trim().split('\n').map(l => JSON.parse(l)) : null }); } };
     handler({ method, url, headers, body }, res);
   });
 }
@@ -259,6 +274,20 @@ srv.listen(8443, async () => {
   global.fakeOrders = null;
   const row = db.conversations.at(-1);
   ok('turn usage + latency stored with the conversation', row.usage && row.usage.mode === 'tools' && row.usage.rounds === 1 && typeof row.latency_ms === 'number' && 'cost_usd' in row.usage && !('started' in row.usage));
+  // Streaming: lines arrive filtered (dialect + links), a tool round resets
+  // them, CHOICES never stream, and the final reply comes in 'done'.
+  let round = 0;
+  global.fakeClaude = async () => (round++ === 0
+    ? { usage: {}, stop_reason: 'tool_use', content: [{ type: 'text', text: 'لحظة أدور\n' }, { type: 'tool_use', id: 's1', name: 'search_products', input: { query: 'أكيا' } }] }
+    : { usage: {}, stop_reason: 'end_turn', content: [{ type: 'text', text: 'جرب [أكيا](https://evil.com/x) مش حامض\nسطر ثاني\nCHOICES: [أخذ أكيا]' }] });
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_stream_01', stream: true });
+  const evs = r.events || [];
+  const lines = evs.filter(e => e.t === 'line').map(e => e.text);
+  ok('stream: ndjson events, reset after tool round, filtered lines, done last', r.headers['content-type'].includes('ndjson') &&
+    evs.some(e => e.t === 'reset') && lines.includes('جرب أكيا مو حامض') && lines.includes('سطر ثاني') && !lines.some(l => l.includes('CHOICES')) &&
+    evs.at(-1).t === 'done' && evs.at(-1).reply.includes('CHOICES: [أخذ أكيا]') && !evs.at(-1).reply.includes('evil.com'));
+  ok('stream: first line time measured', typeof db.conversations.at(-1).usage.first_line_ms === 'number');
+  global.fakeClaude = null;
   process.env.TOOLS_STORES = ''; global.fakeClaude = null;
   global.fakeClaude = async () => ({ usage: {}, stop_reason: 'end_turn', content: [{ type: 'text', text: 'مش متوفر دلوقتي، ليه كده؟ أقرب شي ليه البديل\nCHOICES: [عايز بديل]' }] });
   r = await call(h, 'POST', '/api/index', DRIP, { messages: msg, sessionId: 'session_regress_dialect' });
