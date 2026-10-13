@@ -309,7 +309,7 @@ function detectDropOffStep(messages) {
   return 'after_welcome';
 }
 
-async function logConversation(storeId, sessionId, messages, recommendation, reachedRecommendation, dropOffStep) {
+async function logConversation(storeId, sessionId, messages, recommendation, reachedRecommendation, dropOffStep, usage, latencyMs) {
   try {
     const body = JSON.stringify({
       session_id: sessionId,
@@ -317,7 +317,9 @@ async function logConversation(storeId, sessionId, messages, recommendation, rea
       messages: messages,
       recommendation: recommendation || null,
       reached_recommendation: reachedRecommendation || false,
-      drop_off_step: dropOffStep || null
+      drop_off_step: dropOffStep || null,
+      usage: usage || null,
+      latency_ms: latencyMs == null ? null : latencyMs
     });
     const url = new URL(`${SUPABASE_URL}/rest/v1/conversations`);
     const options = {
@@ -1349,12 +1351,42 @@ function buildToolPrompt(base) {
 }
 const TOOL_SYSTEM_PROMPT = buildToolPrompt(SYSTEM_PROMPT);
 
-function logUsage(u, extra) {
+// USD per million tokens. cache_write is the 5-minute TTL rate.
+const PRICES = {
+  'claude-sonnet-4-6': { in: 3, out: 15, cache_read: 0.3, cache_write: 3.75 }
+};
+const MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-4-6';
+
+// Per-turn measurement, stored with the conversation row: tokens, cost and
+// where the time went. Vercel Hobby keeps logs for an hour only.
+function newMetrics(mode) {
+  return { mode, model: MODEL, rounds: 0, in: 0, out: 0, cache_read: 0, cache_write: 0,
+    cost_usd: 0, claude_ms: 0, tool_ms: 0, prep_ms: 0, started: Date.now() };
+}
+
+function logUsage(u, extra, m) {
   u = u || {};
   console.log('USAGE', JSON.stringify({
     in: u.input_tokens, out: u.output_tokens,
     cache_read: u.cache_read_input_tokens, cache_write: u.cache_creation_input_tokens, ...extra
   }));
+  if (!m) return;
+  m.rounds += 1;
+  m.in += u.input_tokens || 0;
+  m.out += u.output_tokens || 0;
+  m.cache_read += u.cache_read_input_tokens || 0;
+  m.cache_write += u.cache_creation_input_tokens || 0;
+  const p = PRICES[m.model];
+  if (p) {
+    m.cost_usd = +((m.in * p.in + m.out * p.out + m.cache_read * p.cache_read + m.cache_write * p.cache_write) / 1e6).toFixed(6);
+  }
+}
+
+// Times one Claude call into m.claude_ms.
+async function timedCreate(params, m) {
+  const t = Date.now();
+  try { return await anthropic.messages.create(params); }
+  finally { if (m) m.claude_ms += Date.now() - t; }
 }
 
 function textOf(response) {
@@ -1362,14 +1394,15 @@ function textOf(response) {
 }
 
 // Hardcoded-catalog mode (prompt v7): links are injected from BEAN_LINKS.
-async function chatWithPromptCatalog(messages) {
-  const response = await anthropic.messages.create({
-    model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-6',
+async function chatWithPromptCatalog(messages, m) {
+  if (m) m.prep_ms = Date.now() - m.started;
+  const response = await timedCreate({
+    model: MODEL,
     max_tokens: 800,
     system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
-    messages: messages.map(m => m && m.role === 'assistant' ? { ...m, content: stripStoreLinks(m.content) } : m)
-  });
-  logUsage(response.usage);
+    messages: messages.map(x => x && x.role === 'assistant' ? { ...x, content: stripStoreLinks(x.content) } : x)
+  }, m);
+  logUsage(response.usage, undefined, m);
   return injectProductLinks(stripStoreLinks(textOf(response)));
 }
 
@@ -1385,7 +1418,7 @@ function finishToolReply(text, allowed) {
 // Tool mode: Claude calls search_products (up to 4 rounds), then answers.
 // Only product URLs returned by the tool survive in the reply.
 const MAX_TOOL_ROUNDS = 4;
-async function chatWithTools(storeId, messages, sessionId, firstName) {
+async function chatWithTools(storeId, messages, sessionId, firstName, m) {
   const allowed = new Set();
   const texts = [];
   const systemPrompt = await toolPromptFor(storeId);
@@ -1420,29 +1453,32 @@ async function chatWithTools(storeId, messages, sessionId, firstName) {
     convo.push({ role: 'assistant', content: [{ type: 'tool_use', id: 'auto_lookup', name: 'search_products', input: { query: named.join('، '), include_unavailable: true } }] });
     convo.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'auto_lookup', content: JSON.stringify(out) }] });
   }
+  if (m) m.prep_ms = Date.now() - m.started;
   for (let round = 0; ; round++) {
     const last = round >= MAX_TOOL_ROUNDS;
-    const response = await anthropic.messages.create({
-      model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-6',
+    const response = await timedCreate({
+      model: MODEL,
       max_tokens: 1200,
       system,
       tools: catalog.TOOLS,
       ...(last ? { tool_choice: { type: 'none' } } : {}),
       messages: convo
-    });
-    logUsage(response.usage, { round, stop: response.stop_reason });
+    }, m);
+    logUsage(response.usage, { round, stop: response.stop_reason }, m);
     const text = textOf(response);
     if (text) texts.push(text);
     // The final answer stands alone; text written before a tool call is used
     // only if the final round wrote nothing.
     if (response.stop_reason !== 'tool_use' || last) return finishToolReply(text || texts.join('\n\n'), allowed);
     convo.push({ role: 'assistant', content: response.content });
+    const toolStart = Date.now();
     const results = await Promise.all(response.content.filter(b => b.type === 'tool_use').map(async b => {
       let out;
       try { out = await catalog.run(storeId, b.name, b.input); } catch (err) { out = { error: err.message }; }
       collectUrls(out, allowed);
       return { type: 'tool_result', tool_use_id: b.id, content: JSON.stringify(out), ...(out && out.error ? { is_error: true } : {}) };
     }));
+    if (m) m.tool_ms += Date.now() - toolStart;
     convo.push({ role: 'user', content: results });
   }
 }
@@ -1637,9 +1673,11 @@ module.exports = async (req, res) => {
         return res.json({ reply: 'خذ نفس بسيط وجرب بعد شوي 🙂' });
       }
 
-      const draft = toolsEnabled(storeId)
-        ? await chatWithTools(storeId, messages, sessionId, firstName)
-        : await chatWithPromptCatalog(messages);
+      const tools = toolsEnabled(storeId);
+      const metrics = newMetrics(tools ? 'tools' : 'prompt');
+      const draft = tools
+        ? await chatWithTools(storeId, messages, sessionId, firstName, metrics)
+        : await chatWithPromptCatalog(messages, metrics);
       // Deterministic dialect pass; every replacement is logged so the
       // violation rate can be tracked.
       const { text: reply, changes: dialectFixes } = enforceSaudi(draft);
@@ -1648,10 +1686,14 @@ module.exports = async (req, res) => {
       const updatedMessages = [...messages, { role: 'assistant', content: reply }];
       const { recommendation, reached } = detectRecommendation(updatedMessages);
       const dropOff = detectDropOffStep(updatedMessages);
+      const { started, ...usage } = metrics;
+      usage.dialect_fixes = dialectFixes.reduce((n, c) => n + c.count, 0);
+      const latencyMs = Date.now() - started;
+      console.log('TURN', JSON.stringify({ storeId, latency_ms: latencyMs, ...usage }));
 
       // Regression replays (scripts/regression.js) are never logged.
       if (sessionId && !String(sessionId).startsWith('session_regress_')) {
-        await logConversation(storeId, sessionId, updatedMessages, recommendation, reached, dropOff);
+        await logConversation(storeId, sessionId, updatedMessages, recommendation, reached, dropOff, usage, latencyMs);
       }
 
       return res.json({ reply });
