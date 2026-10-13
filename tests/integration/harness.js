@@ -229,6 +229,8 @@ srv.listen(8443, async () => {
   calls.length = 0;
   r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_mem_guest', firstName: 'سارة' });
   ok('memory: guest gets no memory block (name ignored)', calls[0].system.length === 1);
+  const row = db.conversations.at(-1);
+  ok('turn usage + latency stored with the conversation', row.usage && row.usage.mode === 'tools' && row.usage.rounds === 1 && typeof row.latency_ms === 'number' && 'cost_usd' in row.usage && !('started' in row.usage));
   process.env.TOOLS_STORES = ''; global.fakeClaude = null;
   global.fakeClaude = async () => ({ usage: {}, stop_reason: 'end_turn', content: [{ type: 'text', text: 'مش متوفر دلوقتي، ليه كده؟ أقرب شي ليه البديل\nCHOICES: [عايز بديل]' }] });
   r = await call(h, 'POST', '/api/index', DRIP, { messages: msg, sessionId: 'session_regress_dialect' });
