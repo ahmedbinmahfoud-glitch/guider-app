@@ -39,12 +39,19 @@
   // Salla populates user.id for guests too, so only a non-guest id counts.
   // The storefront SDK may load after this script: wait for salla.onReady,
   // or poll briefly if the SDK isn't on the page yet.
+  // The first name is sent with each chat request so the bot can greet a
+  // logged-in customer by name; the server never stores it.
+  let firstName = null;
   function identifyCustomer() {
     let customerId = null;
     try {
       const cfg = window.salla.config;
       const guest = typeof cfg.isGuest === 'function' ? cfg.isGuest() : true;
-      if (!guest) customerId = cfg.get('user.id');
+      if (!guest) {
+        customerId = cfg.get('user.id');
+        const name = cfg.get('user.first_name') || cfg.get('user.name') || '';
+        firstName = String(name).trim().split(/\s+/)[0] || null;
+      }
     } catch (e) {}
     if (!customerId) return;
     const key = 'guider_identified_' + sessionId + '_' + customerId;
@@ -467,7 +474,7 @@
       const res = await fetch(`${API}/api/index`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages, sessionId })
+        body: JSON.stringify({ messages, sessionId, firstName })
       });
       const data = await res.json();
       typing.remove();
