@@ -502,12 +502,14 @@ async function logSallaOrder(storeId, eventType, payload) {
 // salla_events marks the customer as done (also when nothing was found), so
 // the API budget (10K calls/month per store) is spent once per customer.
 const BACKFILL_EVENT = 'memory.backfill';
+const backfilled = new Set(); // per warm instance, saves the marker lookup
 async function backfillCustomerOrders(storeId, customerId) {
   const s = encodeURIComponent(storeId), c = String(customerId);
-  if (!/^\d{1,20}$/.test(c)) return false;
+  if (!/^\d{1,20}$/.test(c) || backfilled.has(storeId + ':' + c)) return false;
   const done = await sb('GET', `/salla_events?select=id&store_id=eq.${s}&event_type=eq.${BACKFILL_EVENT}` +
     `&raw_payload->>customer_id=eq.${c}&limit=1`);
-  if (!done.ok || !Array.isArray(done.data) || done.data.length) return false;
+  if (!done.ok || !Array.isArray(done.data)) return false;
+  if (done.data.length) { backfilled.add(storeId + ':' + c); return false; }
   const token = await storeToken(storeId);
   if (!token) return false;
   const res = await httpsGet('api.salla.dev', `/admin/v2/orders?customer_id=${c}&per_page=50`, {
@@ -548,6 +550,7 @@ async function backfillCustomerOrders(storeId, customerId) {
       item_keys: list && list[0] && Array.isArray(list[0].items) && list[0].items[0] ? Object.keys(list[0].items[0]) : null
     }
   }, 'return=minimal');
+  backfilled.add(storeId + ':' + c);
   console.log('BACKFILL', JSON.stringify({ storeId, listed: list ? list.length : null, matched: mine.length, stored }));
   return stored > 0;
 }

@@ -248,6 +248,14 @@ srv.listen(8443, async () => {
   r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_mem_newcust' });
   r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_mem_newcust' });
   ok('backfill: customer with no orders checked once, then marked', global.sallaOrderCalls === 2 && db.salla_events.filter(e => e.event_type === 'memory.backfill').length === 2);
+  db.session_identities.push({ store_id: 'dripon', session_id: 'session_mem_webhookcust', customer_id: '504', last_seen: ago(0) });
+  db.orders.push({ store_id: 'dripon', customer_id: '504', salla_order_id: 'w1', event_type: 'order.created', total_amount: 50, created_at: ago(1), raw_payload: { status_slug: 'completed', items: [{ name: 'حراز 250', quantity: 1 }] } });
+  global.fakeOrders = () => ({ data: [
+    { id: 'w1', customer: { id: 504 }, status: { slug: 'completed' }, items: [{ name: 'حراز 250', quantity: 1 }] },
+    { id: 9100, customer: { id: 504 }, status: { slug: 'completed' }, date: { date: ago(90) }, items: [{ name: 'أكيا 250', quantity: 1 }] }
+  ] });
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_mem_webhookcust' });
+  ok('backfill: runs for a customer who already has webhook orders, no duplicates', db.orders.filter(o => o.customer_id === '504').length === 2 && db.orders.some(o => o.salla_order_id === '9100'));
   global.fakeOrders = null;
   const row = db.conversations.at(-1);
   ok('turn usage + latency stored with the conversation', row.usage && row.usage.mode === 'tools' && row.usage.rounds === 1 && typeof row.latency_ms === 'number' && 'cost_usd' in row.usage && !('started' in row.usage));
