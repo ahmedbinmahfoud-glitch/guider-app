@@ -286,6 +286,11 @@ srv.listen(8443, async () => {
   ok('stream: ndjson events, reset after tool round, filtered lines, done last', r.headers['content-type'].includes('ndjson') &&
     evs.some(e => e.t === 'reset') && lines.includes('جرب أكيا مو حامض') && lines.includes('سطر ثاني') && !lines.some(l => l.includes('CHOICES')) &&
     evs.at(-1).t === 'done' && evs.at(-1).reply.includes('CHOICES: [أخذ أكيا]') && !evs.at(-1).reply.includes('evil.com'));
+  round = 1;
+  global.fakeClaude = async () => ({ usage: {}, stop_reason: 'end_turn', content: [{ type: 'text', text: 'الفرق:\n| | أكيا | شوكو |\n|---|---|---|\n| النكهة | بندق | كراميل |\nCHOICES: [أخذ أكيا]' }] });
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_stream_02', stream: true });
+  const tl = (r.events || []).filter(e => e.t === 'line').map(e => e.text);
+  ok('tables flattened in stream and final reply', tl.includes('• أكيا — شوكو') && tl.includes('• النكهة — بندق — كراميل') && !tl.some(l => l.includes('|')) && !r.events.at(-1).reply.split('CHOICES:')[0].includes('|'));
   ok('stream: first line time measured', typeof db.conversations.at(-1).usage.first_line_ms === 'number');
   global.fakeClaude = null;
   process.env.TOOLS_STORES = ''; global.fakeClaude = null;

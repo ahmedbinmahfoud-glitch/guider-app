@@ -1442,6 +1442,19 @@ function logUsage(u, extra, m) {
   }
 }
 
+// The widget can't render markdown tables: a table row becomes a bullet line
+// and separator rows disappear. Works line by line, so streaming can use it.
+function tableLine(line) {
+  const t = line.trim();
+  if (!/^\|.*\|$/.test(t)) return line;
+  const cells = t.slice(1, -1).split('|').map(c => c.trim()).filter(Boolean);
+  if (!cells.length || cells.every(c => /^:?-{2,}:?$/.test(c))) return null;
+  return '• ' + cells.join(' — ');
+}
+function flattenTables(text) {
+  return text.split('\n').map(tableLine).filter(l => l !== null).join('\n');
+}
+
 // Streamed Claude call: text deltas go to onText as they arrive.
 async function timedStream(params, m, onText) {
   const t = Date.now();
@@ -1461,7 +1474,9 @@ function lineStreamer(emit, allowed) {
   function flush(line) {
     if (stopped) return;
     if (line.includes('CHOICES:')) { stopped = true; return; }
-    emit({ t: 'line', text: enforceSaudi(keepAllowedLinks(line, allowed)).text });
+    const flat = tableLine(line);
+    if (flat === null) return;
+    emit({ t: 'line', text: enforceSaudi(keepAllowedLinks(flat, allowed)).text });
     sent++;
   }
   return {
@@ -1504,7 +1519,7 @@ function finishToolReply(text, allowed) {
   const cut = text.indexOf('CHOICES:');
   const body = cut === -1 ? text : text.slice(0, cut);
   const tail = cut === -1 ? '' : text.slice(cut).replace(/\[([^\]]+)\]\([^)]*\)/g, '[$1]');
-  return keepAllowedLinks(body, allowed) + tail;
+  return keepAllowedLinks(flattenTables(body), allowed) + tail;
 }
 
 // Tool mode: Claude calls search_products (up to 4 rounds), then answers.
