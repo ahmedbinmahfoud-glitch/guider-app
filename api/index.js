@@ -519,11 +519,11 @@ async function backfillCustomerOrders(storeId, customerId) {
   const mine = list ? list.filter(o => o && o.customer && String(o.customer.id) === c) : [];
   const existing = await sb('GET', `/orders?select=salla_order_id&store_id=eq.${s}&customer_id=eq.${c}`);
   const seen = new Set(existing.ok && Array.isArray(existing.data) ? existing.data.map(r => String(r.salla_order_id)) : []);
-  let stored = 0;
+  const rows = [];
   for (const o of mine) {
     const d = extractOrderData({ data: o });
     if (!d.salla_order_id || seen.has(d.salla_order_id)) continue;
-    const r = await sb('POST', '/orders', {
+    rows.push({
       store_id: storeId, event_type: 'backfill', event_timestamp: new Date().toISOString(),
       salla_order_id: d.salla_order_id, salla_order_reference: d.salla_order_reference,
       customer_id: c, customer_city: d.customer_city, total_amount: d.total_amount, currency: d.currency,
@@ -531,8 +531,13 @@ async function backfillCustomerOrders(storeId, customerId) {
       payment_method: d.payment_method, items_count: d.items_count, product_names: d.product_names,
       session_id: null, attribution_method: 'backfill', attribution_confidence: 'none',
       raw_payload: { event: 'backfill', status_slug: d.status_slug, order_date: d.order_date, source: d.source, items: d.items }
-    }, 'return=minimal');
-    if (r.ok) stored++; else console.error('backfill insert failed:', r.status);
+    });
+  }
+  // One insert for all rows: the database is far from the function region.
+  let stored = 0;
+  if (rows.length) {
+    const r = await sb('POST', '/orders', rows, 'return=minimal');
+    if (r.ok) stored = rows.length; else console.error('backfill insert failed:', r.status);
   }
   await sb('POST', '/salla_events', {
     store_id: storeId, event_type: BACKFILL_EVENT,
