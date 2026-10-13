@@ -272,6 +272,28 @@ srv.listen(8443, async () => {
   r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_mem_webhookcust' });
   ok('backfill: runs for a customer who already has webhook orders, no duplicates', db.orders.filter(o => o.customer_id === '504').length === 2 && db.orders.some(o => o.salla_order_id === '9100'));
   global.fakeOrders = null;
+  // Cart button: off by default; on for test customers; 50/50 per session
+  // on CART_STORES; arm recorded; cart events stored without personal data.
+  calls.length = 0;
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_mem_returning' });
+  ok('cart: off by default', r.body.cart === false && !calls[0].system.some(b => b.text.includes('زر السلة مفعّل')));
+  process.env.CART_TEST_CUSTOMERS = '501'; calls.length = 0;
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_mem_returning' });
+  ok('cart: on for a test customer, prompt note added, arm stored', r.body.cart === true && calls[0].system.some(b => b.text.includes('زر السلة مفعّل')) && db.conversations.at(-1).usage.cart_arm === 'test');
+  process.env.CART_TEST_CUSTOMERS = ''; process.env.CART_STORES = 'dripon';
+  const arms = [];
+  for (let i = 0; i < 12; i++) {
+    r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_cartab_' + i + 'xyz' });
+    arms.push(db.conversations.at(-1).usage.cart_arm + ':' + r.body.cart);
+  }
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_cartab_0xyz' });
+  ok('cart: 50/50 split, stable per session', arms.some(x => x === 'cart:true') && arms.some(x => x === 'control:false') && db.conversations.at(-1).usage.cart_arm + ':' + r.body.cart === arms[0]);
+  process.env.CART_STORES = '';
+  r = await call(h, 'POST', '/api/cart-event', DRIP, { sessionId: 'session_cartab_0xyz', productId: '550675919', action: 'add' });
+  const ce = db.salla_events.at(-1);
+  ok('cart event stored (session + product only)', r.status === 204 && ce.event_type === 'widget.cart_add' && ce.store_id === 'dripon' && JSON.stringify(Object.keys(ce.raw_payload)) === '["session_id","product_id"]');
+  r = await call(h, 'POST', '/api/cart-event', DRIP, { sessionId: 'session_cartab_0xyz', productId: 'x', action: 'add' });
+  ok('cart event rejects bad input', r.status === 400);
   const row = db.conversations.at(-1);
   ok('turn usage + latency stored with the conversation', row.usage && row.usage.mode === 'tools' && row.usage.rounds === 1 && typeof row.latency_ms === 'number' && 'cost_usd' in row.usage && !('started' in row.usage));
   // Streaming: lines arrive filtered (dialect + links), a tool round resets
