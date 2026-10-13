@@ -313,6 +313,9 @@
       font-weight: 600;
       transition: all 0.2s;
     }
+    .guider-cart { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 10px; }
+    .guider-cart .guider-checkout { background: #0d1f3c; color: #fff; }
+    .guider-cart .guider-choice:disabled { opacity: 0.7; cursor: default; transform: none; }
     .guider-choice:hover {
       background: #0d1f3c; color: #fff;
       transform: translateY(-1px);
@@ -429,7 +432,70 @@
     return { text: messageText, choices };
   }
 
-  function addMessage(text, role) {
+  // Cart button (only when the server enables it for this session): one
+  // "add" button per product linked in the reply, then a checkout button.
+  function logCart(action, productId) {
+    try {
+      fetch(API + '/api/cart-event', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
+        body: JSON.stringify({ sessionId: sessionId, productId: productId || null, action: action })
+      }).catch(function() {});
+    } catch (e) {}
+  }
+
+  function cartUrl() {
+    let base = '';
+    try { base = window.salla.config.get('store.url') || ''; } catch (e) {}
+    if (!base) base = location.origin + '/';
+    return base.replace(/\/?$/, '/') + 'cart';
+  }
+
+  function addCartButtons(text) {
+    const sallaCart = window.salla && window.salla.cart;
+    if (!sallaCart || typeof sallaCart.addItem !== 'function') return;
+    const seen = {}, items = [];
+    for (const m of text.matchAll(/\[([^\]]+)\]\(([^)\s]+)\)/g)) {
+      const id = (m[2].match(/\/p(\d+)(?:[\/?#]|$)/) || [])[1];
+      if (!id || seen[id] || items.length >= 3) continue;
+      seen[id] = true;
+      items.push({ id: id, name: m[1].replace(/\*/g, '').trim(), href: m[2] });
+    }
+    if (!items.length) return;
+    const row = document.createElement('div');
+    row.className = 'guider-cart';
+    let checkout = null;
+    items.forEach(function(it) {
+      const btn = document.createElement('button');
+      btn.className = 'guider-choice';
+      const label = '🛒 أضف ' + (it.name.length > 26 ? it.name.slice(0, 26) + '…' : it.name);
+      btn.textContent = label;
+      btn.onclick = function() {
+        btn.disabled = true;
+        btn.textContent = '...';
+        Promise.resolve(sallaCart.addItem({ id: Number(it.id), quantity: 1 })).then(function() {
+          btn.textContent = '✓ انضاف للسلة';
+          logCart('add', it.id);
+          if (!checkout) {
+            checkout = document.createElement('button');
+            checkout.className = 'guider-choice guider-checkout';
+            checkout.textContent = 'إتمام الطلب ←';
+            checkout.onclick = function() { logCart('checkout'); window.location.href = cartUrl(); };
+            row.appendChild(checkout);
+          }
+        }).catch(function() {
+          // e.g. the product needs an option chosen on its page
+          btn.disabled = false;
+          btn.textContent = label;
+          logCart('add_failed', it.id);
+          window.open(it.href, '_blank', 'noopener');
+        });
+      };
+      row.appendChild(btn);
+    });
+    messagesEl.appendChild(row);
+  }
+
+  function addMessage(text, role, opts) {
     const { text: cleanText, choices } = parseChoices(text);
     const div = document.createElement('div');
     div.className = role === 'assistant' ? 'guider-msg-ai' : 'guider-msg-user';
@@ -440,6 +506,7 @@
       div.textContent = cleanText;
     }
     messagesEl.appendChild(div);
+    if (role === 'assistant' && opts && opts.cart) addCartButtons(cleanText);
 
     if (choices.length > 0) {
       const choicesDiv = document.createElement('div');
@@ -477,15 +544,16 @@
         body: JSON.stringify({ messages, sessionId, firstName, stream: true })
       });
       const type = res.headers.get('content-type') || '';
-      let reply;
+      let data;
       if (type.indexOf('ndjson') !== -1 && res.body && res.body.getReader) {
-        reply = await readStream(res, typing);
+        data = await readStream(res, typing);
       } else {
-        reply = (await res.json()).reply;
+        data = await res.json();
       }
+      const reply = data && data.reply;
       if (!reply) throw new Error('no reply');
       typing.remove();
-      addMessage(reply, 'assistant');
+      addMessage(reply, 'assistant', { cart: !!data.cart });
       messages.push({ role: 'assistant', content: reply });
     } catch(e) {
       typing.remove();
@@ -522,7 +590,7 @@
         let ev; try { ev = JSON.parse(raw); } catch (e) { continue; }
         if (ev.t === 'line') { lines.push(ev.text); show(); }
         else if (ev.t === 'reset') { lines = []; if (live) live.innerHTML = ''; }
-        else if (ev.t === 'done') reply = ev.reply;
+        else if (ev.t === 'done') reply = ev;
       }
       if (reply) break;
     }
