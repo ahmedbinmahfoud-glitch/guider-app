@@ -208,18 +208,20 @@ async function toolPromptFor(storeId) {
 const catalog = createCatalog((...a) => sb(...a));
 // Cart button (Block 4). CART_STORES: stores where it runs as a 50/50 test
 // per session; CART_TEST_CUSTOMERS: Salla customer ids that always get it
-// (owner testing on a live store before launch). Returns 'cart', 'control',
-// 'test' or null (feature off).
+// (owner testing on a live store before launch); CART_ALL_STORES: on for every
+// session (no holdout). Returns 'all', 'cart', 'control', 'test' or null.
 function envList(name) {
   return (process.env[name] || '').split(',').map(x => x.trim()).filter(Boolean);
 }
 function cartArm(storeId, sessionId, customerId) {
   if (customerId && envList('CART_TEST_CUSTOMERS').includes(String(customerId))) return 'test';
+  if (envList('CART_ALL_STORES').includes(String(storeId))) return 'all';
   if (!envList('CART_STORES').includes(String(storeId)) || !sessionId) return null;
   let h = 0;
   for (const ch of String(sessionId)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   return h % 2 ? 'cart' : 'control';
 }
+function cartOn(arm) { return arm === 'all' || arm === 'cart' || arm === 'test'; }
 const CART_NOTE = `🛒 زر السلة مفعّل: تحت ردك يظهر زر "أضف للسلة" لكل منتج كتبت رابطه، وبعده زر "إتمام الطلب".
 - لما ترشّح منتج، اكتب رابطه (من نتائج البحث) عشان يظهر زره، وقل مرة وحدة: "تقدر تضيفه للسلة من الزر تحت 👇".
 - هذا يلغي قاعدة "ممنوع لغة السلة": لا تقول "ضفته لك" (الزبون هو اللي يضغط)، لكن تقدر تقول "أضفه للسلة".`;
@@ -1599,7 +1601,7 @@ async function chatWithTools(storeId, messages, sessionId, firstName, m, emit) {
   if (mem) system.push({ type: 'text', text: mem.prompt });
   const arm = cartArm(storeId, sessionId, mem && mem.customerId);
   if (m) m.cart_arm = arm;
-  if (arm === 'cart' || arm === 'test') system.push({ type: 'text', text: CART_NOTE });
+  if (cartOn(arm)) system.push({ type: 'text', text: CART_NOTE });
   if (customerWritesEnglish(messages)) system.push({ type: 'text', text: ENGLISH_NOTE });
   const named = [];
   for (const m of [...convo].reverse()) {
@@ -1901,7 +1903,7 @@ module.exports = async (req, res) => {
 
       // The final reply goes out before logging, so the shopper doesn't wait
       // for the database; the connection closes once the row is written.
-      const cart = metrics.cart_arm === 'cart' || metrics.cart_arm === 'test';
+      const cart = cartOn(metrics.cart_arm);
       if (streaming) emit({ t: 'done', reply, cart });
 
       // Regression replays (scripts/regression.js) are never logged.
