@@ -224,6 +224,22 @@ const CART_NOTE = `🛒 زر السلة مفعّل: تحت ردك يظهر زر 
 - لما ترشّح منتج، اكتب رابطه (من نتائج البحث) عشان يظهر زره، وقل مرة وحدة: "تقدر تضيفه للسلة من الزر تحت 👇".
 - هذا يلغي قاعدة "ممنوع لغة السلة": لا تقول "ضفته لك" (الزبون هو اللي يضغط)، لكن تقدر تقول "أضفه للسلة".`;
 
+// Reply language follows the customer's latest message that has enough
+// letters to tell ("ok" doesn't). The prompt alone let Arabic replies through
+// to English messages.
+const ENGLISH_NOTE = `🌐 The customer is writing in English. Reply entirely in English, CHOICES included. Write product names in English (e.g. أكيا → Akia) but keep each link URL exactly as the search tool returned it. Prices in SAR.`;
+function customerWritesEnglish(messages) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (!m || m.role !== 'user' || typeof m.content !== 'string') continue;
+    const latin = (m.content.match(/[A-Za-z]/g) || []).length;
+    const arabic = (m.content.match(/[\u0621-\u064A]/g) || []).length;
+    if (latin + arabic < 4) continue;
+    return latin > arabic * 2;
+  }
+  return false;
+}
+
 function toolsEnabled(storeId) {
   return (process.env.TOOLS_STORES || '').split(',').map(x => x.trim()).filter(Boolean).includes(String(storeId));
 }
@@ -1584,6 +1600,7 @@ async function chatWithTools(storeId, messages, sessionId, firstName, m, emit) {
   const arm = cartArm(storeId, sessionId, mem && mem.customerId);
   if (m) m.cart_arm = arm;
   if (arm === 'cart' || arm === 'test') system.push({ type: 'text', text: CART_NOTE });
+  if (customerWritesEnglish(messages)) system.push({ type: 'text', text: ENGLISH_NOTE });
   const named = [];
   for (const m of [...convo].reverse()) {
     if (named.length >= 4) break;

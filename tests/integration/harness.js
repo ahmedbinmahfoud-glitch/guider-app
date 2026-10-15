@@ -308,6 +308,13 @@ srv.listen(8443, async () => {
   ok('cart event stored (session + product only)', r.status === 204 && ce.event_type === 'widget.cart_add' && ce.store_id === 'dripon' && JSON.stringify(Object.keys(ce.raw_payload)) === '["session_id","product_id"]');
   r = await call(h, 'POST', '/api/cart-event', DRIP, { sessionId: 'session_cartab_0xyz', productId: 'x', action: 'add' });
   ok('cart event rejects bad input', r.status === 400);
+  // Reply language follows the customer's latest message.
+  calls.length = 0;
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }, { role: 'assistant', content: 'هلا!' }, { role: 'user', content: 'Perfect then, does it fit in a vanilla iced latte?' }], sessionId: 'session_lang_01' });
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'Could you talk in English' }, { role: 'assistant', content: 'Sure' }, { role: 'user', content: 'Ok' }], sessionId: 'session_lang_01' });
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'ممتاز ينفع iced latte?' }], sessionId: 'session_lang_01' });
+  const en = c => c.system.some(b => b.text.includes('writing in English'));
+  ok('english reply note: English message yes, short "Ok" follows the previous one, mixed Arabic no', en(calls[0]) && en(calls[1]) && !en(calls[2]));
   const row = db.conversations.at(-1);
   ok('turn usage + latency stored with the conversation', row.usage && row.usage.mode === 'tools' && row.usage.rounds === 1 && typeof row.latency_ms === 'number' && 'cost_usd' in row.usage && !('started' in row.usage));
   // Streaming: lines arrive filtered (dialect + links), a tool round resets
