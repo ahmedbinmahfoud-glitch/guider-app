@@ -469,6 +469,10 @@ function orderTime(orderData) {
 async function attributeToSession(orderData, storeId) {
   const none = { session_id: null, method: 'none', confidence: 'none' };
   if (!orderData.customer_id) return none;
+  // The owner's own test orders would inflate the numbers.
+  if (envList('ATTRIBUTION_EXCLUDE_CUSTOMERS').includes(String(orderData.customer_id))) {
+    return { session_id: null, method: 'excluded', confidence: 'none' };
+  }
   const ids = await sb('GET', `/session_identities?select=session_id` +
     `&store_id=eq.${encodeURIComponent(storeId)}` +
     `&customer_id=eq.${encodeURIComponent(orderData.customer_id)}&limit=50`);
