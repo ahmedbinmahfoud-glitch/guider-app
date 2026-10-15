@@ -11,6 +11,8 @@ function match(row, q) {
     if (op === 'eq' && String(cell) !== val) return false;
     if (op === 'gte' && !(row[k] >= val)) return false;
     if (op === 'lt' && !(row[k] < val)) return false;
+    if (op === 'lte' && !(row[k] <= val)) return false;
+    if (op === 'in' && !val.slice(1, -1).split(',').includes(String(cell))) return false;
     if (op === 'is' && val === 'null' && !(row[k] === null || row[k] === undefined)) return false;
     if (op === 'not' && val === 'is.null' && (row[k] === null || row[k] === undefined)) return false;
   }
@@ -120,6 +122,14 @@ srv.listen(8443, async () => {
   ok('order attributed to session', o && o.store_id === '999' && o.session_id === 'session_2_demodemo' && o.attribution_method === 'customer_id');
   r = await call(h, 'POST', '/api/salla/webhook', { authorization: 'Bearer privatesecret' }, { event: 'order.created', merchant: 999, data: { id: 8, customer: { id: 77 } } });
   ok('order with unknown customer not attributed', db.orders.at(-1).session_id === null);
+  // Riyadh local time, as Salla sends it
+  const riyadh = ms => new Date(ms + 3 * 3600000).toISOString().replace('T', ' ').replace('Z', '').slice(0, 19) + '.000000';
+  r = await call(h, 'POST', '/api/salla/webhook', { authorization: 'Bearer privatesecret' }, { event: 'order.status.updated', merchant: 999, data: { order: { id: 70, customer: { id: 55 }, date: { date: riyadh(Date.now() - 2 * 86400000) }, status: { slug: 'shipped' } } } });
+  ok('old order placed before the chat is not attributed', db.orders.at(-1).salla_order_id === '70' && db.orders.at(-1).session_id === null);
+  r = await call(h, 'POST', '/api/salla/webhook', { authorization: 'Bearer privatesecret' }, { event: 'order.created', merchant: 999, data: { id: 71, customer: { id: 55 }, date: { date: riyadh(Date.now() + 8 * 86400000) } } });
+  ok('order more than 7 days after the chat is not attributed', db.orders.at(-1).session_id === null);
+  r = await call(h, 'POST', '/api/salla/webhook', { authorization: 'Bearer privatesecret' }, { event: 'order.created', merchant: 999, data: { id: 72, customer: { id: 55 }, date: { date: riyadh(Date.now() + 60000) } } });
+  ok('order shortly after the chat is attributed', db.orders.at(-1).session_id === 'session_2_demodemo');
   r = await call(h, 'POST', '/api/salla/webhook', { authorization: 'Bearer privatesecret' }, { event: 'order.created', merchant: 999, data: { id: 9, customer: { id: 88, email: 'x@y.z', mobile: 555, first_name: 'B', birthday: { date: '1990-01-01' } }, items: [{ name: 'حراز', quantity: 2, product: { id: 321 }, amounts: { total: { amount: 147.2 } } }] } });
   const pii = JSON.stringify(db.orders.at(-1));
   ok('order keeps no contact details', !/x@y\.z|555|1990-01-01|"B"/.test(pii) && db.orders.at(-1).customer_id === '88');

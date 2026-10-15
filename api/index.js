@@ -455,20 +455,35 @@ function extractOrderData(payload) {
 // customer was seen in it within the 7 days before the order and it had a
 // conversation with the bot.
 const ATTRIBUTION_WINDOW_DAYS = 7;
+// Salla order dates are Riyadh local time ("2026-10-14 16:08:34.000000").
+function orderTime(orderData) {
+  const m = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})/.exec(orderData.order_date || '');
+  const t = m ? Date.parse(`${m[1]}T${m[2]}+03:00`) : NaN;
+  return isNaN(t) ? Date.now() : t;
+}
+
+// An order counts for the bot only if the customer chatted in one of their
+// sessions during the 7 days BEFORE the order was placed. Status updates of
+// old orders arrive days later, so the window is anchored on the order date,
+// not on when the webhook arrived.
 async function attributeToSession(orderData, storeId) {
   const none = { session_id: null, method: 'none', confidence: 'none' };
   if (!orderData.customer_id) return none;
-  const since = new Date(Date.now() - ATTRIBUTION_WINDOW_DAYS * 86400000).toISOString();
-  const ids = await sb('GET', `/session_identities?select=session_id,last_seen` +
+  const ids = await sb('GET', `/session_identities?select=session_id` +
     `&store_id=eq.${encodeURIComponent(storeId)}` +
-    `&customer_id=eq.${encodeURIComponent(orderData.customer_id)}` +
-    `&last_seen=gte.${encodeURIComponent(since)}&order=last_seen.desc&limit=5`);
-  if (!ids.ok || !Array.isArray(ids.data)) return none;
-  for (const row of ids.data) {
-    const conv = await sb('GET', `/conversations?select=id&session_id=eq.${encodeURIComponent(row.session_id)}&limit=1`);
-    if (conv.ok && Array.isArray(conv.data) && conv.data.length) {
-      return { session_id: row.session_id, method: 'customer_id', confidence: 'high' };
-    }
+    `&customer_id=eq.${encodeURIComponent(orderData.customer_id)}&limit=50`);
+  if (!ids.ok || !Array.isArray(ids.data) || !ids.data.length) return none;
+  const sessions = [...new Set(ids.data.map(r => r.session_id))].filter(x => /^session_[\w]+$/.test(x));
+  if (!sessions.length) return none;
+  const at = orderTime(orderData);
+  const from = new Date(at - ATTRIBUTION_WINDOW_DAYS * 86400000).toISOString();
+  const to = new Date(at).toISOString();
+  const conv = await sb('GET', `/conversations?select=session_id,created_at` +
+    `&store_id=eq.${encodeURIComponent(storeId)}&session_id=in.(${sessions.join(',')})` +
+    `&created_at=gte.${encodeURIComponent(from)}&created_at=lte.${encodeURIComponent(to)}` +
+    `&order=created_at.desc&limit=1`);
+  if (conv.ok && Array.isArray(conv.data) && conv.data.length) {
+    return { session_id: conv.data[0].session_id, method: 'customer_id', confidence: 'high' };
   }
   return none;
 }
