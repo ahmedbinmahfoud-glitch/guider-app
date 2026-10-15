@@ -227,7 +227,7 @@ const CART_NOTE = `🛒 زر السلة مفعّل: تحت ردك يظهر زر 
 // Reply language follows the customer's latest message that has enough
 // letters to tell ("ok" doesn't). The prompt alone let Arabic replies through
 // to English messages.
-const ENGLISH_NOTE = `🌐 The customer is writing in English. Reply entirely in English, CHOICES included. Write product names in English (e.g. أكيا → Akia) but keep each link URL exactly as the search tool returned it. Prices in SAR.`;
+const ENGLISH_NOTE = `🌐 The customer is writing in English. Reply entirely in English. The CHOICES line must be in English too (e.g. CHOICES: [Get 250g] [Get 1kg] [Show me the recipe]) — this overrides the Arabic CHOICES examples. Write product names in English (e.g. أكيا → Akia) but keep each link URL exactly as the search tool returned it. Prices in SAR.`;
 function customerWritesEnglish(messages) {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
