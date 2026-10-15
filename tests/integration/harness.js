@@ -302,7 +302,10 @@ srv.listen(8443, async () => {
   }
   r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_cartab_0xyz' });
   ok('cart: 50/50 split, stable per session', arms.some(x => x === 'cart:true') && arms.some(x => x === 'control:false') && db.conversations.at(-1).usage.cart_arm + ':' + r.body.cart === arms[0]);
-  process.env.CART_STORES = '';
+  process.env.CART_STORES = ''; process.env.CART_ALL_STORES = 'dripon';
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_cartab_0xyz' });
+  ok('cart: CART_ALL_STORES turns it on for every session', r.body.cart === true && db.conversations.at(-1).usage.cart_arm === 'all');
+  process.env.CART_ALL_STORES = '';
   r = await call(h, 'POST', '/api/cart-event', DRIP, { sessionId: 'session_cartab_0xyz', productId: '550675919', action: 'add' });
   const ce = db.salla_events.at(-1);
   ok('cart event stored (session + product only)', r.status === 204 && ce.event_type === 'widget.cart_add' && ce.store_id === 'dripon' && JSON.stringify(Object.keys(ce.raw_payload)) === '["session_id","product_id"]');
