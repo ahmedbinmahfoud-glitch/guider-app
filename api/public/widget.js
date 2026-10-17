@@ -34,6 +34,49 @@
     sessionId = newSessionId();
   }
 
+  // Visit source for marketing analysis: the first and the latest external
+  // touch of this session (UTM tags, ad click id type, referring domain only,
+  // landing path). Runs on every page, including those where the chat is
+  // hidden, because ads often land on product pages. Sent once with the first
+  // chat message; nothing personal is read.
+  const TOUCH_KEY = 'guider_touch';
+  function currentTouch() {
+    const q = new URLSearchParams(location.search);
+    const t = {};
+    ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term'].forEach(function(k) {
+      const v = q.get(k); if (v) t[k] = v.slice(0, 100);
+    });
+    const click = q.get('fbclid') ? 'meta' : (q.get('gclid') || q.get('gbraid') || q.get('wbraid')) ? 'google'
+      : q.get('ttclid') ? 'tiktok' : (q.get('ScCid') || q.get('sccid')) ? 'snap' : q.get('twclid') ? 'x' : null;
+    if (click) t.click_id = click;
+    let ref = '';
+    try { ref = document.referrer ? new URL(document.referrer).hostname : ''; } catch (e) {}
+    const internal = ref === location.hostname;
+    if (ref && !internal) t.referrer = ref;
+    if (!Object.keys(t).length) return internal ? null : { direct: true, landing_path: location.pathname.slice(0, 200), at: Date.now() };
+    t.landing_path = location.pathname.slice(0, 200);
+    t.at = Date.now();
+    return t;
+  }
+  let touch = { session: sessionId };
+  try {
+    const saved = JSON.parse(localStorage.getItem(TOUCH_KEY) || 'null');
+    if (saved && saved.session === sessionId) touch = saved;
+    const now = currentTouch();
+    if (now && !(now.direct && touch.first)) {
+      if (!touch.first) touch.first = now;
+      if (!now.direct) touch.last = now;
+    }
+    localStorage.setItem(TOUCH_KEY, JSON.stringify(touch));
+  } catch (e) {}
+  let contextSent = false;
+  function visitContext() {
+    if (contextSent) return undefined;
+    let mobile = false;
+    try { mobile = /Mobi|Android|iPhone/i.test(navigator.userAgent) || window.matchMedia('(max-width: 768px)').matches; } catch (e) {}
+    return { first: touch.first || null, last: touch.last || null, device: mobile ? 'mobile' : 'desktop', chat_path: location.pathname.slice(0, 200) };
+  }
+
   // Report the logged-in Salla customer for this session. Runs on every page,
   // including checkout and thank-you where the chat itself is hidden.
   // Salla populates user.id for guests too, so only a non-guest id counts.
@@ -541,8 +584,9 @@
       const res = await fetch(`${API}/api/index`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages, sessionId, firstName, stream: true })
+        body: JSON.stringify({ messages, sessionId, firstName, stream: true, ctx: visitContext() })
       });
+      if (res.ok) contextSent = true;
       const type = res.headers.get('content-type') || '';
       let data;
       if (type.indexOf('ndjson') !== -1 && res.body && res.body.getReader) {
