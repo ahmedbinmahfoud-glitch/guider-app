@@ -1,7 +1,7 @@
 // Integration harness for api/index.js. Run via tests/integration/run.sh (self-signed cert for the fake Supabase is generated there).
 // Local test harness: fake Supabase (HTTPS), fake Anthropic, fake Salla store-info.
 const https = require('https'); const fs = require('fs'); const Module = require('module');
-const db = { stores: [], conversations: [], orders: [], salla_events: [], session_identities: [], products: [], store_config: [] };
+const db = { stores: [], conversations: [], orders: [], salla_events: [], session_identities: [], products: [], store_config: [], session_context: [] };
 const log = [];
 function match(row, q) {
   for (const [k, v] of q) {
@@ -27,7 +27,7 @@ const srv = https.createServer({ key: fs.readFileSync('k.pem'), cert: fs.readFil
     if (req.method === 'POST') {
       const oc = u.searchParams.get('on_conflict');
       for (const item of (Array.isArray(body) ? body : [body])) {
-        if (oc) { const keys = oc.split(','); const ex = db[t].find(r => keys.every(k => String(r[k]) === String(item[k]))); if (ex) { Object.assign(ex, item); continue; } }
+        if (oc) { const keys = oc.split(','); const ex = db[t].find(r => keys.every(k => String(r[k]) === String(item[k]))); if (ex) { if (!String(req.headers.prefer || '').includes('ignore-duplicates')) Object.assign(ex, item); continue; } }
         db[t].push({ ...item, created_at: new Date().toISOString() });
       }
       res.statusCode = 201; return res.end();
@@ -318,6 +318,13 @@ srv.listen(8443, async () => {
   r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'ممتاز ينفع iced latte?' }], sessionId: 'session_lang_01' });
   const en = c => c.system.some(b => b.text.includes('writing in English'));
   ok('english reply note: English message yes, short "Ok" follows the previous one, mixed Arabic no', en(calls[0]) && en(calls[1]) && !en(calls[2]));
+  // Visit context: whitelisted fields only, geo from headers, once per session.
+  r = await call(h, 'POST', '/api/index', { ...DRIP, 'x-vercel-ip-country': 'SA', 'x-vercel-ip-city': 'Jeddah', 'x-forwarded-for': '1.2.3.4' }, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_ctx_01',
+    ctx: { first: { utm_source: 'instagram', utm_campaign: 'oct_sale', click_id: 'meta', landing_path: '/ar/p123', at: 1792000000000, email: 'x@y.z' }, last: null, device: 'mobile', chat_path: '/ar/' } });
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_ctx_01', ctx: { first: { utm_source: 'tiktok' }, device: 'desktop' } });
+  const sc = db.session_context.filter(x => x.session_id === 'session_ctx_01');
+  ok('visit context stored once, whitelisted, with geo and no IP', sc.length === 1 && sc[0].first_touch.utm_source === 'instagram' && sc[0].first_touch.click_id === 'meta' && !('email' in sc[0].first_touch) &&
+    sc[0].device === 'mobile' && sc[0].country === 'SA' && sc[0].city === 'Jeddah' && !JSON.stringify(sc[0]).includes('1.2.3.4'));
   const row = db.conversations.at(-1);
   ok('turn usage + latency stored with the conversation', row.usage && row.usage.mode === 'tools' && row.usage.rounds === 1 && typeof row.latency_ms === 'number' && 'cost_usd' in row.usage && !('started' in row.usage));
   // Streaming: lines arrive filtered (dialect + links), a tool round resets

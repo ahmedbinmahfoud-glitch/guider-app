@@ -484,6 +484,34 @@ function orderTime(orderData) {
 // sessions during the 7 days BEFORE the order was placed. Status updates of
 // old orders arrive days later, so the window is anchored on the order date,
 // not on when the webhook arrived.
+// Visit context (marketing source) sent by the widget with the first chat
+// message of a session. Only whitelisted, length-capped fields are kept;
+// country and city come from Vercel's IP geolocation headers (no IP stored).
+const TOUCH_FIELDS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'click_id', 'referrer', 'landing_path', 'direct', 'at'];
+function cleanTouch(t) {
+  if (!t || typeof t !== 'object') return null;
+  const out = {};
+  for (const k of TOUCH_FIELDS) {
+    const v = t[k];
+    if (v == null) continue;
+    if (k === 'direct') { out.direct = v === true; continue; }
+    if (k === 'at') { if (Number.isFinite(Number(v))) out.at = new Date(Number(v)).toISOString(); continue; }
+    out[k] = String(v).slice(0, k === 'landing_path' ? 200 : 100);
+  }
+  return Object.keys(out).length ? out : null;
+}
+function saveVisitContext(storeId, sessionId, ctx, headers) {
+  if (!ctx || typeof ctx !== 'object' || typeof sessionId !== 'string' || !/^session_[\w]{6,60}$/.test(sessionId)) return Promise.resolve();
+  const dec = v => { try { return v ? decodeURIComponent(String(v)).slice(0, 80) : null; } catch { return null; } };
+  return sb('POST', '/session_context?on_conflict=store_id,session_id', {
+    store_id: storeId, session_id: sessionId,
+    first_touch: cleanTouch(ctx.first), last_touch: cleanTouch(ctx.last),
+    device: ctx.device === 'mobile' ? 'mobile' : ctx.device === 'desktop' ? 'desktop' : null,
+    chat_path: typeof ctx.chat_path === 'string' ? ctx.chat_path.slice(0, 200) : null,
+    country: dec(headers['x-vercel-ip-country']), city: dec(headers['x-vercel-ip-city'])
+  }, 'resolution=ignore-duplicates,return=minimal').then(r => { if (!r.ok) console.error('session_context insert failed:', r.status); });
+}
+
 async function attributeToSession(orderData, storeId) {
   const none = { session_id: null, method: 'none', confidence: 'none' };
   if (!orderData.customer_id) return none;
@@ -1858,7 +1886,7 @@ module.exports = async (req, res) => {
     try {
       if (!storeId) return res.status(403).json({ error: 'Forbidden origin' });
 
-      const { messages, sessionId, firstName } = req.body;
+      const { messages, sessionId, firstName, ctx } = req.body;
       if (!messages || !Array.isArray(messages)) {
         return res.status(400).json({ error: 'messages array required' });
       }
@@ -1868,6 +1896,7 @@ module.exports = async (req, res) => {
         return res.json({ reply: 'خذ نفس بسيط وجرب بعد شوي 🙂' });
       }
 
+      const contextSaved = saveVisitContext(storeId, sessionId, ctx, req.headers || {}).catch(() => {});
       const tools = toolsEnabled(storeId);
       const metrics = newMetrics(tools ? 'tools' : 'prompt');
       // Streaming (tool mode): newline-delimited JSON events — {t:'line'}
@@ -1911,6 +1940,7 @@ module.exports = async (req, res) => {
         await logConversation(storeId, sessionId, updatedMessages, recommendation, reached, dropOff, usage, latencyMs);
       }
 
+      await contextSaved;
       if (streaming) return res.end();
       return res.json({ reply, cart });
     } catch (err) {
