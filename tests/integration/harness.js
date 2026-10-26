@@ -330,6 +330,16 @@ srv.listen(8443, async () => {
     const t = enforceSaudi('[غوتشي بلوم بروفومو دي فيوري](https://x/p1) و فيرزاتشي او دي بارفان، دي أحلى ريحة');
     ok('dialect filter leaves perfume names in links and "او دي" alone', t.text.includes('بروفومو دي فيوري') && t.text.includes('او دي بارفان') && t.text.includes('هذي أحلى'));
   }
+  // Product page context + per-store widget texts.
+  calls.length = 0;
+  r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'يناسبني؟' }], sessionId: 'session_pdp_01', page: '/ar/akia-250/p10' });
+  const pdpMsgs = calls[0].messages;
+  ok('product page: bot told which product is open, with its catalog facts', calls[0].system.some(b => b.text.includes('فاتح الحين صفحة هذا المنتج: أكيا 250')) &&
+    pdpMsgs.some(m => Array.isArray(m.content) && m.content.some(c => c.tool_use_id === 'page_product' && c.content.includes('أكيا'))));
+  r = await call(h, 'GET', '/api/widget-config', DRIP);
+  ok('widget-config: allowed origin gets JSON (empty = widget defaults)', r.status === 200 && r.body && typeof r.body === 'object');
+  r = await call(h, 'GET', '/api/widget-config', { origin: 'https://evil.com' });
+  ok('widget-config: unknown origin 403', r.status === 403);
   const row = db.conversations.at(-1);
   ok('turn usage + latency stored with the conversation', row.usage && row.usage.mode === 'tools' && row.usage.rounds === 1 && typeof row.latency_ms === 'number' && 'cost_usd' in row.usage && !('started' in row.usage));
   // Streaming: lines arrive filtered (dialect + links), a tool round resets
