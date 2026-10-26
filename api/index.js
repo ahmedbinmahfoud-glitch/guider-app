@@ -915,6 +915,8 @@ function httpsPost(hostname, pathStr, headers, body) {
 }
 
 const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+const { createEnricher } = require('../lib/perfume-enrich');
+const enricher = createEnricher((...x) => sb(...x), anthropic, process.env.CLAUDE_MODEL || 'claude-sonnet-4-6');
 
 const SYSTEM_PROMPT = `أنت "أحمد" — مستشار قهوة من فريق دريب اون. باريستا حقيقي يفهم القهوة بعمق، وأذكى مساعد بيع. مهمتك الأولى مصلحة الزبون. البيع يجي طبيعياً لما الزبون يحس إنك في صفّه.
 
@@ -1845,6 +1847,16 @@ module.exports = async (req, res) => {
 
   // The widget reports which Salla customer is browsing, on every page
   // including checkout and thank-you. This is the join key for attribution.
+  // Catalog enrichment (perfume metadata from product descriptions). Preview
+  // deployments only, which Vercel protects with deployment authentication.
+  if (urlPath === '/api/admin/enrich' && req.method === 'POST') {
+    if (process.env.VERCEL_ENV !== 'preview') return res.status(404).json({ error: 'Not found' });
+    const { store, limit, all } = req.body || {};
+    if (typeof store !== 'string' || !/^[\w-]{1,40}$/.test(store)) return res.status(400).json({ error: 'store required' });
+    const out = await enricher.enrichBatch(store, Math.min(Number(limit) || 8, 12), all !== true);
+    return res.status(out.ok ? 200 : 500).json(out);
+  }
+
   if (urlPath === '/api/identify' && req.method === 'POST') {
     if (!storeId) return res.status(403).json({ error: 'Forbidden origin' });
     const { sessionId, customerId } = req.body || {};
