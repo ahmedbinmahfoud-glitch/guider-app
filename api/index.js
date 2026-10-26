@@ -187,6 +187,7 @@ function stripStoreLinks(text) {
 // search_products instead of the hardcoded prompt catalog. Unset in
 // production until a store passes the regression set; set on Preview to test.
 const { createCatalog, collectUrls, keepAllowedLinks } = require('../lib/catalog');
+const { createPerfumeCatalog } = require('../lib/perfume-catalog');
 const { enforceSaudi } = require('../lib/dialect');
 const { buildPromptV8 } = require('../lib/prompt');
 const { createMemory } = require('../lib/memory');
@@ -195,17 +196,24 @@ const memory = createMemory((...a) => sb(...a), { backfill: (...a) => backfillCu
 // Prompt v8: a store with a store_config row gets the generic prompt filled
 // from that row; others in tool mode fall back to prompt v7 minus its catalog.
 const promptCache = new Map(); // storeId -> { at, prompt }
-async function toolPromptFor(storeId) {
+// Store profile from store_config: the v8 prompt, the vertical (coffee by
+// default, 'perfume' for perfume stores) and the perfume-request WhatsApp.
+async function storeProfile(storeId) {
   const hit = promptCache.get(storeId);
-  if (hit && Date.now() - hit.at < 60 * 1000) return hit.prompt;
+  if (hit && Date.now() - hit.at < 60 * 1000) return hit;
   const r = await sb('GET', `/store_config?select=persona,rules&store_id=eq.${encodeURIComponent(storeId)}`);
   if (!r.ok) console.error('store_config load failed:', r.status);
-  if (!(r.ok && Array.isArray(r.data) && r.data[0])) return hit ? hit.prompt : TOOL_SYSTEM_PROMPT;
-  const prompt = buildPromptV8(r.data[0]);
-  promptCache.set(storeId, { at: Date.now(), prompt });
-  return prompt;
+  if (!(r.ok && Array.isArray(r.data) && r.data[0])) return hit || { prompt: TOOL_SYSTEM_PROMPT, vertical: 'coffee' };
+  const rules = r.data[0].rules || {};
+  const profile = { at: Date.now(), prompt: buildPromptV8(r.data[0]), vertical: rules.vertical || 'coffee',
+    requestWhatsapp: (rules.contacts || {}).request_whatsapp || null };
+  promptCache.set(storeId, profile);
+  return profile;
 }
+async function toolPromptFor(storeId) { return (await storeProfile(storeId)).prompt; }
 const catalog = createCatalog((...a) => sb(...a));
+const perfumeCatalog = createPerfumeCatalog((...a) => sb(...a));
+const catalogFor = profile => (profile.vertical === 'perfume' ? perfumeCatalog : catalog);
 // Cart button (Block 4). CART_STORES: stores where it runs as a 50/50 test
 // per session; CART_TEST_CUSTOMERS: Salla customer ids that always get it
 // (owner testing on a live store before launch); CART_ALL_STORES: on for every
@@ -260,6 +268,17 @@ const STATIC_ORIGINS = {
   'https://www.driponcoffeesa.com': 'dripon'
 };
 
+// Extra origin → store mappings from env EXTRA_ORIGINS ("https://a.com=store,...").
+// Used on Preview to point a store's domain at a staging catalog before install.
+function extraOrigins() {
+  const map = {};
+  for (const pair of (process.env.EXTRA_ORIGINS || '').split(',')) {
+    const [o, id] = pair.split('=').map(x => (x || '').trim());
+    if (o && id) map[o] = id;
+  }
+  return map;
+}
+
 // Origins of stores that installed the app, refreshed every 5 minutes.
 let storeOriginCache = { at: 0, map: {} };
 async function getStoreOrigins() {
@@ -285,7 +304,7 @@ async function getStoreOrigins() {
 async function resolveStore(origin) {
   if (!origin) return null;
   const installed = await getStoreOrigins();
-  return installed[origin] || STATIC_ORIGINS[origin] || null;
+  return installed[origin] || STATIC_ORIGINS[origin] || extraOrigins()[origin] || null;
 }
 
 async function applyCors(req, res) {
@@ -915,6 +934,8 @@ function httpsPost(hostname, pathStr, headers, body) {
 }
 
 const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+const { createEnricher } = require('../lib/perfume-enrich');
+const enricher = createEnricher((...x) => sb(...x), anthropic, process.env.CLAUDE_MODEL || 'claude-sonnet-4-6');
 
 const SYSTEM_PROMPT = `أنت "أحمد" — مستشار قهوة من فريق دريب اون. باريستا حقيقي يفهم القهوة بعمق، وأذكى مساعد بيع. مهمتك الأولى مصلحة الزبون. البيع يجي طبيعياً لما الزبون يحس إنك في صفّه.
 
@@ -1620,11 +1641,13 @@ async function chatWithTools(storeId, messages, sessionId, firstName, m, emit) {
   // uncached system block; their past products are looked up below so a
   // reorder suggestion uses current price and stock.
   // Independent lookups run together: the database is far from the function.
-  const [systemPrompt, mem] = await Promise.all([
-    toolPromptFor(storeId),
+  const profile = await storeProfile(storeId);
+  const cat = catalogFor(profile);
+  const [mem] = await Promise.all([
     memory.forSession(storeId, sessionId, firstName).catch(err => { console.error('memory failed:', err.message); return null; }),
-    catalog.load(storeId).catch(() => null)
+    cat.load(storeId).catch(() => null)
   ]);
+  const systemPrompt = profile.prompt;
   const system = [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }];
   if (mem) system.push({ type: 'text', text: mem.prompt });
   const arm = cartArm(storeId, sessionId, mem && mem.customerId);
@@ -1634,19 +1657,19 @@ async function chatWithTools(storeId, messages, sessionId, firstName, m, emit) {
   const named = [];
   for (const m of [...convo].reverse()) {
     if (named.length >= 4) break;
-    for (const n of await catalog.mentioned(storeId, typeof m.content === 'string' ? m.content : '')) {
+    for (const n of await cat.mentioned(storeId, typeof m.content === 'string' ? m.content : '')) {
       if (!named.includes(n) && named.length < 4) named.push(n);
     }
   }
   if (mem && mem.summary) {
     for (const p of mem.summary.products.slice(0, 2)) {
-      for (const n of await catalog.mentioned(storeId, p.name || '')) {
+      for (const n of await cat.mentioned(storeId, p.name || '')) {
         if (!named.includes(n) && named.length < 5) named.push(n);
       }
     }
   }
   if (named.length && convo.length && convo[convo.length - 1].role === 'user') {
-    const out = await catalog.lookup(storeId, named);
+    const out = await cat.lookup(storeId, named);
     collectUrls(out, allowed);
     convo.push({ role: 'assistant', content: [{ type: 'tool_use', id: 'auto_lookup', name: 'search_products', input: { query: named.join('، '), include_unavailable: true } }] });
     convo.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'auto_lookup', content: JSON.stringify(out) }] });
@@ -1658,7 +1681,7 @@ async function chatWithTools(storeId, messages, sessionId, firstName, m, emit) {
       model: MODEL,
       max_tokens: 1200,
       system,
-      tools: catalog.TOOLS,
+      tools: cat.TOOLS,
       ...(last ? { tool_choice: { type: 'none' } } : {}),
       messages: convo
     };
@@ -1677,7 +1700,7 @@ async function chatWithTools(storeId, messages, sessionId, firstName, m, emit) {
     const toolStart = Date.now();
     const results = await Promise.all(response.content.filter(b => b.type === 'tool_use').map(async b => {
       let out;
-      try { out = await catalog.run(storeId, b.name, b.input); } catch (err) { out = { error: err.message }; }
+      try { out = await cat.run(storeId, b.name, b.input, { sessionId, requestWhatsapp: profile.requestWhatsapp }); } catch (err) { out = { error: err.message }; }
       collectUrls(out, allowed);
       return { type: 'tool_result', tool_use_id: b.id, content: JSON.stringify(out), ...(out && out.error ? { is_error: true } : {}) };
     }));
@@ -1845,6 +1868,16 @@ module.exports = async (req, res) => {
 
   // The widget reports which Salla customer is browsing, on every page
   // including checkout and thank-you. This is the join key for attribution.
+  // Catalog enrichment (perfume metadata from product descriptions). Preview
+  // deployments only, which Vercel protects with deployment authentication.
+  if (urlPath === '/api/admin/enrich' && req.method === 'POST') {
+    if (process.env.VERCEL_ENV !== 'preview') return res.status(404).json({ error: 'Not found' });
+    const { store, limit, all } = req.body || {};
+    if (typeof store !== 'string' || !/^[\w-]{1,40}$/.test(store)) return res.status(400).json({ error: 'store required' });
+    const out = await enricher.enrichBatch(store, Math.min(Number(limit) || 8, 12), all !== true);
+    return res.status(out.ok ? 200 : 500).json(out);
+  }
+
   if (urlPath === '/api/identify' && req.method === 'POST') {
     if (!storeId) return res.status(403).json({ error: 'Forbidden origin' });
     const { sessionId, customerId } = req.body || {};

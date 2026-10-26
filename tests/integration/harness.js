@@ -325,6 +325,11 @@ srv.listen(8443, async () => {
   const sc = db.session_context.filter(x => x.session_id === 'session_ctx_01');
   ok('visit context stored once, whitelisted, with geo and no IP', sc.length === 1 && sc[0].first_touch.utm_source === 'instagram' && sc[0].first_touch.click_id === 'meta' && !('email' in sc[0].first_touch) &&
     sc[0].device === 'mobile' && sc[0].country === 'SA' && sc[0].city === 'Jeddah' && !JSON.stringify(sc[0]).includes('1.2.3.4'));
+  {
+    const { enforceSaudi } = require(require('path').join(require('path').dirname(process.argv[2]), '..', 'lib', 'dialect.js'));
+    const t = enforceSaudi('[غوتشي بلوم بروفومو دي فيوري](https://x/p1) و فيرزاتشي او دي بارفان، دي أحلى ريحة');
+    ok('dialect filter leaves perfume names in links and "او دي" alone', t.text.includes('بروفومو دي فيوري') && t.text.includes('او دي بارفان') && t.text.includes('هذي أحلى'));
+  }
   const row = db.conversations.at(-1);
   ok('turn usage + latency stored with the conversation', row.usage && row.usage.mode === 'tools' && row.usage.rounds === 1 && typeof row.latency_ms === 'number' && 'cost_usd' in row.usage && !('started' in row.usage));
   // Streaming: lines arrive filtered (dialect + links), a tool round resets
