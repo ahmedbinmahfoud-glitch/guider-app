@@ -205,7 +205,9 @@ async function storeProfile(storeId) {
   if (!r.ok) console.error('store_config load failed:', r.status);
   if (!(r.ok && Array.isArray(r.data) && r.data[0])) return hit || { prompt: TOOL_SYSTEM_PROMPT, vertical: 'coffee' };
   const rules = r.data[0].rules || {};
+  const persona = r.data[0].persona || {};
   const profile = { at: Date.now(), prompt: buildPromptV8(r.data[0]), vertical: rules.vertical || 'coffee',
+    widget: persona.widget && typeof persona.widget === 'object' ? persona.widget : null,
     requestWhatsapp: (rules.contacts || {}).request_whatsapp || null };
   promptCache.set(storeId, profile);
   return profile;
@@ -1629,7 +1631,7 @@ function finishToolReply(text, allowed) {
 // Tool mode: Claude calls search_products (up to 4 rounds), then answers.
 // Only product URLs returned by the tool survive in the reply.
 const MAX_TOOL_ROUNDS = 4;
-async function chatWithTools(storeId, messages, sessionId, firstName, m, emit) {
+async function chatWithTools(storeId, messages, sessionId, firstName, m, emit, page) {
   const allowed = new Set();
   const texts = [];
 
@@ -1666,6 +1668,19 @@ async function chatWithTools(storeId, messages, sessionId, firstName, m, emit) {
       for (const n of await cat.mentioned(storeId, p.name || '')) {
         if (!named.includes(n) && named.length < 5) named.push(n);
       }
+    }
+  }
+  // The product page the shopper has open (widget sends the path): looked up
+  // so "does it suit me?" / "how does it taste?" is answered about it.
+  const pageId = typeof page === 'string' ? (page.match(/\/p(\d+)(?:[\/?#]|$)/) || [])[1] : null;
+  if (pageId && convo.length && convo[convo.length - 1].role === 'user') {
+    const hit = ((await cat.load(storeId)) || []).filter(p => String(p.salla_product_id) === pageId);
+    if (hit.length) {
+      const out = await cat.search(storeId, { include_unavailable: true }, hit);
+      collectUrls(out, allowed);
+      system.push({ type: 'text', text: `🛍️ الزبون فاتح الحين صفحة هذا المنتج: ${hit[0].name}. لو سؤاله عام ("يناسبني؟"، "وش طعمه؟"، "شي يشبهه") فهو يقصد هذا المنتج؛ معلوماته في نتيجة page_product. لا تعيد له رابط نفس الصفحة إلا لو طلبه.` });
+      convo.push({ role: 'assistant', content: [{ type: 'tool_use', id: 'page_product', name: 'search_products', input: { query: hit[0].name, include_unavailable: true } }] });
+      convo.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'page_product', content: JSON.stringify(out) }] });
     }
   }
   if (named.length && convo.length && convo[convo.length - 1].role === 'user') {
@@ -1868,6 +1883,16 @@ module.exports = async (req, res) => {
 
   // The widget reports which Salla customer is browsing, on every page
   // including checkout and thank-you. This is the join key for attribution.
+  // Per-store widget texts (title, bubble, welcome, product-page variants),
+  // from store_config.persona.widget; the widget keeps its defaults if absent.
+  if (urlPath === '/api/widget-config' && req.method === 'GET') {
+    if (!storeId) return res.status(403).json({ error: 'Forbidden origin' });
+    const profile = await storeProfile(storeId);
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.setHeader('Vary', 'Origin');
+    return res.json(profile.widget || {});
+  }
+
   // Catalog enrichment (perfume metadata from product descriptions). Preview
   // deployments only, which Vercel protects with deployment authentication.
   if (urlPath === '/api/admin/enrich' && req.method === 'POST') {
@@ -1919,7 +1944,7 @@ module.exports = async (req, res) => {
     try {
       if (!storeId) return res.status(403).json({ error: 'Forbidden origin' });
 
-      const { messages, sessionId, firstName, ctx } = req.body;
+      const { messages, sessionId, firstName, ctx, page } = req.body;
       if (!messages || !Array.isArray(messages)) {
         return res.status(400).json({ error: 'messages array required' });
       }
@@ -1948,7 +1973,7 @@ module.exports = async (req, res) => {
         };
       }
       const draft = tools
-        ? await chatWithTools(storeId, messages, sessionId, firstName, metrics, emit)
+        ? await chatWithTools(storeId, messages, sessionId, firstName, metrics, emit, page)
         : await chatWithPromptCatalog(messages, metrics);
       // Deterministic dialect pass; every replacement is logged so the
       // violation rate can be tracked.

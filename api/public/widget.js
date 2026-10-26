@@ -120,7 +120,6 @@
   // URL EXCLUSION — Don't show widget on these pages
   // ============================================
   const EXCLUDED_URL_PATTERNS = [
-    /\/p\d+/i,           // Product detail pages (Salla: /xxx/p1234567)
     /\/cart/i,           // Cart page
     /\/checkout/i,       // Checkout
     /\/orders?\b/i,      // Order pages
@@ -137,6 +136,20 @@
     /\/invoice/i,        // Invoice
     /\/track/i,          // Order tracking
   ];
+
+  // Product pages: ads mostly land here. The button sits higher on mobile so
+  // it never covers the theme's add-to-cart bar, and the bubble appears
+  // after a few seconds with a product question.
+  const ON_PRODUCT_PAGE = /\/p\d+(?:[\/?#]|$)/i.test(window.location.pathname);
+
+  // Texts per store from /api/widget-config (defaults = Drip On).
+  let ui = {
+    title: 'أحمد — باريستا دريب اون', subtitle: 'اسألني عن أي قهوة', icon: '☕',
+    bubble: '☕ خلني أرشّحلك قهوتك',
+    welcome: 'مرحباً! كيف تحب قهوتك اليوم؟\nCHOICES: [مع الحليب 🥛] [إسبريسو بلاك ☕] [فلتر V60 🫗] [بارد ❄️] [ما أعرف 🤷]',
+    pdp_bubble: '👋 عندك سؤال عن هالمحصول؟',
+    pdp_welcome: 'هلا! عندك سؤال عن هالمحصول؟ أقدر أساعدك 🙂\nCHOICES: [يناسب طريقة تحضيري؟] [وش طعمه؟] [أبغى شي يشبهه]'
+  };
 
   function shouldHideWidget() {
     const path = window.location.pathname;
@@ -266,6 +279,7 @@
       }
       #guider-fab { left: 12px; bottom: 12px; }
       #guider-bubble { max-width: 180px; font-size: 12px; }
+      #guider-fab.guider-pdp { bottom: 96px; left: 12px; }
     }
 
     #guider-header {
@@ -448,6 +462,22 @@
   `);
 
   const widget = document.getElementById('guider-widget');
+  function applyUi() {
+    document.getElementById('guider-header-title').textContent = ui.title;
+    document.getElementById('guider-header-sub').textContent = ui.subtitle;
+    document.getElementById('guider-btn').textContent = ui.icon;
+    document.getElementById('guider-bubble').textContent = ON_PRODUCT_PAGE ? ui.pdp_bubble : ui.bubble;
+  }
+  applyUi();
+  fetch(API + '/api/widget-config').then(function(r) { return r.ok ? r.json() : null; }).then(function(cfg) {
+    if (cfg && typeof cfg === 'object') { Object.keys(ui).forEach(function(k) { if (typeof cfg[k] === 'string' && cfg[k]) ui[k] = cfg[k]; }); applyUi(); }
+  }).catch(function() {});
+  if (ON_PRODUCT_PAGE) {
+    document.getElementById('guider-fab').classList.add('guider-pdp');
+    const bw = document.getElementById('guider-bubble-wrap');
+    bw.style.display = 'none';
+    setTimeout(function() { bw.style.display = ''; }, 8000);
+  }
   const fab = document.getElementById('guider-fab');
   const bubble = document.getElementById('guider-bubble');
   const bubbleClose = document.getElementById('guider-bubble-close');
@@ -584,7 +614,7 @@
       const res = await fetch(`${API}/api/index`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages, sessionId, firstName, stream: true, ctx: visitContext() })
+        body: JSON.stringify({ messages, sessionId, firstName, stream: true, ctx: visitContext(), page: location.pathname.slice(0, 200) })
       });
       if (res.ok) contextSent = true;
       const type = res.headers.get('content-type') || '';
@@ -655,7 +685,7 @@
 
     if (messages.length === 0) {
       setTimeout(() => {
-        const welcome = 'مرحباً! كيف تحب قهوتك اليوم؟\nCHOICES: [مع الحليب 🥛] [إسبريسو بلاك ☕] [فلتر V60 🫗] [بارد ❄️] [ما أعرف 🤷]';
+        const welcome = ON_PRODUCT_PAGE ? ui.pdp_welcome : ui.welcome;
         addMessage(welcome, 'assistant');
         messages.push({ role: 'assistant', content: welcome });
       }, 300);
