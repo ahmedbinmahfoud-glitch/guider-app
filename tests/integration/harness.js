@@ -353,6 +353,13 @@ srv.listen(8443, async () => {
   }
   const row = db.conversations.at(-1);
   ok('turn usage + latency stored with the conversation', row.usage && row.usage.mode === 'tools' && row.usage.rounds === 1 && typeof row.latency_ms === 'number' && 'cost_usd' in row.usage && !('started' in row.usage));
+  {
+    let n = 0;
+    global.fakeClaude = async () => (n++ === 0 ? { usage: {}, stop_reason: 'end_turn', content: [] } : { usage: {}, stop_reason: 'end_turn', content: [{ type: 'text', text: 'رد بعد المحاولة' }] });
+    r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_empty_01' });
+    ok('empty reply is retried once instead of sending an empty bubble', r.body.reply === 'رد بعد المحاولة' && n === 2);
+    global.fakeClaude = null;
+  }
   // Streaming: lines arrive filtered (dialect + links), a tool round resets
   // them, CHOICES never stream, and the final reply comes in 'done'.
   let round = 0;

@@ -1694,6 +1694,7 @@ async function chatWithTools(storeId, messages, sessionId, firstName, m, emit, p
     convo.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'auto_lookup', content: JSON.stringify(out) }] });
   }
   if (m) m.prep_ms = Date.now() - m.started;
+  let retriedEmpty = false;
   for (let round = 0; ; round++) {
     const last = round >= MAX_TOOL_ROUNDS;
     const params = {
@@ -1713,7 +1714,20 @@ async function chatWithTools(storeId, messages, sessionId, firstName, m, emit, p
     if (text) texts.push(text);
     // The final answer stands alone; text written before a tool call is used
     // only if the final round wrote nothing.
-    if (response.stop_reason !== 'tool_use' || last) return finishToolReply(text || texts.join('\n\n'), allowed);
+    if (response.stop_reason !== 'tool_use' || last) {
+      const final = text || texts.join('\n\n');
+      // Rare: a round ends with no text at all. Retry once with tools off
+      // instead of sending the shopper an empty bubble.
+      if (!final.trim() && !retriedEmpty && !last && response.stop_reason !== 'tool_use') {
+        retriedEmpty = true;
+        console.error('empty reply, retrying', storeId);
+        convo.push({ role: 'assistant', content: response.content && response.content.length ? response.content : [{ type: 'text', text: '…' }] });
+        convo.push({ role: 'user', content: 'كمّل ردك على سؤالي.' });
+        round = MAX_TOOL_ROUNDS - 1;
+        continue;
+      }
+      return finishToolReply(final || 'صار عندي تعليق بسيط، ممكن تعيد سؤالك؟ 🙂', allowed);
+    }
     if (streamer) streamer.reset();
     convo.push({ role: 'assistant', content: response.content });
     const toolStart = Date.now();
