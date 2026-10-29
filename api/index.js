@@ -208,7 +208,10 @@ async function storeProfile(storeId) {
   const persona = r.data[0].persona || {};
   const profile = { at: Date.now(), prompt: buildPromptV8(r.data[0]), vertical: rules.vertical || 'coffee',
     widget: persona.widget && typeof persona.widget === 'object' ? persona.widget : null,
-    requestWhatsapp: (rules.contacts || {}).request_whatsapp || null };
+    requestWhatsapp: (rules.contacts || {}).request_whatsapp || null,
+    // Merchant-approved external links (e.g. official recipe pages) the bot
+    // may share; every other non-catalog link is removed from replies.
+    allowedLinks: (Array.isArray(rules.allowed_links) ? rules.allowed_links : []).map(l => l && l.url).filter(u => typeof u === 'string' && /^https:\/\//.test(u)) };
   promptCache.set(storeId, profile);
   return profile;
 }
@@ -1645,6 +1648,7 @@ async function chatWithTools(storeId, messages, sessionId, firstName, m, emit, p
   // Independent lookups run together: the database is far from the function.
   const profile = await storeProfile(storeId);
   const cat = catalogFor(profile);
+  for (const u of profile.allowedLinks || []) allowed.add(u);
   const [mem] = await Promise.all([
     memory.forSession(storeId, sessionId, firstName).catch(err => { console.error('memory failed:', err.message); return null; }),
     cat.load(storeId).catch(() => null)
