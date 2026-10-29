@@ -39,6 +39,16 @@
       "ما فيه خصم على الكيلو — اذكر سعره كما هو.",
       "نبيع حبوب كاملة فقط، والطحن موقوف."
     ],
-    "playbook_file": "dripon-playbook.md"
+    "playbook_file": "dripon-playbook.md",
+    "allowed_links": [
+      {
+        "label": "وصفة xbloom للقهوة الحارة",
+        "url": "https://share-h5.xbloom.com/?id=qsmGKclo9vHf4yhYgAoQFA%3D%3D"
+      },
+      {
+        "label": "وصفة xbloom للقهوة الباردة",
+        "url": "https://share-h5.xbloom.com/?id=UdjnE6AYaddz3CUqz6Bc6w%3D%3D"
+      }
+    ]
   }
 }

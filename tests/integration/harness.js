@@ -340,8 +340,26 @@ srv.listen(8443, async () => {
   ok('widget-config: allowed origin gets JSON (empty = widget defaults)', r.status === 200 && r.body && typeof r.body === 'object');
   r = await call(h, 'GET', '/api/widget-config', { origin: 'https://evil.com' });
   ok('widget-config: unknown origin 403', r.status === 403);
+  // Merchant-approved external links survive the link filter; others don't.
+  {
+    const prevTools = process.env.TOOLS_STORES;
+    process.env.TOOLS_STORES = (prevTools ? prevTools + ',' : '') + 'linkstore';
+    process.env.EXTRA_ORIGINS = 'https://links.test=linkstore';
+    db.store_config.push({ store_id: 'linkstore', persona: { name: 'أحمد', store_name: 'تجربة' }, rules: { allowed_links: [{ url: 'https://share-h5.xbloom.com/?id=abc' }] } });
+    global.fakeClaude = async () => ({ usage: {}, stop_reason: 'end_turn', content: [{ type: 'text', text: 'هذي [الوصفة](https://share-h5.xbloom.com/?id=abc) و[رابط ثاني](https://evil.com/x)' }] });
+    r = await call(h, 'POST', '/api/index', { origin: 'https://links.test' }, { messages: [{ role: 'user', content: 'عندي xbloom' }], sessionId: 'session_links_01' });
+    ok('allowed_links: merchant recipe link kept, unknown link removed', r.body.reply.includes('](https://share-h5.xbloom.com/?id=abc)') && !r.body.reply.includes('evil.com'));
+    process.env.TOOLS_STORES = prevTools; process.env.EXTRA_ORIGINS = ''; global.fakeClaude = null;
+  }
   const row = db.conversations.at(-1);
   ok('turn usage + latency stored with the conversation', row.usage && row.usage.mode === 'tools' && row.usage.rounds === 1 && typeof row.latency_ms === 'number' && 'cost_usd' in row.usage && !('started' in row.usage));
+  {
+    let n = 0;
+    global.fakeClaude = async () => (n++ === 0 ? { usage: {}, stop_reason: 'end_turn', content: [] } : { usage: {}, stop_reason: 'end_turn', content: [{ type: 'text', text: 'رد بعد المحاولة' }] });
+    r = await call(h, 'POST', '/api/index', DRIP, { messages: [{ role: 'user', content: 'هلا' }], sessionId: 'session_empty_01' });
+    ok('empty reply is retried once instead of sending an empty bubble', r.body.reply === 'رد بعد المحاولة' && n === 2);
+    global.fakeClaude = null;
+  }
   // Streaming: lines arrive filtered (dialect + links), a tool round resets
   // them, CHOICES never stream, and the final reply comes in 'done'.
   let round = 0;
